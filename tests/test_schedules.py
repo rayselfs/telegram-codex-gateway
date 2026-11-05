@@ -70,8 +70,9 @@ class ScheduleTests(unittest.TestCase):
         self.assertIsNone(self.s.claim())
     def test_pause_cancels_queued_but_not_running(self):
         tid=self.create()
-        for _ in range(2):
-            k,_=self.s.propose('run',task=tid);self.s.confirm(k)
+        with self.s.db:
+            for due in (time.time(),time.time()+60):
+                self.s._insert_run(tid,due,json.dumps(sample()),None,None)
         run=self.s.claim()
         k,_=self.s.propose('pause',task=tid);self.s.confirm(k)
         self.assertEqual({r['state'] for r in self.s.runs()},{'running','cancelled'})
@@ -135,3 +136,44 @@ class ScheduleControllerTests(unittest.IsolatedAsyncioTestCase):
         await c.start([{'type':'text','text':'test'}]);self.assertFalse(c.busy)
         lock.close();await c.start([{'type':'text','text':'test'}]);self.assertTrue(c.busy)
         c.release_execution();j.close()
+
+
+class ManualRunTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.root=directory();self.s=Schedules(self.root/'s');self.j=Journal(self.root/'j')
+        self.c=Controller(FakeRPC(self.root),NS(say=AsyncMock(),buttons=AsyncMock(),display_name='test'),self.j,self.root)
+        self.c.busy=True;self.c.turn='turn';self.j.set('active_reply',123)
+        self.ui=ScheduleUI(self.s,self.c)
+        key,_=self.s.propose('create',spec={**sample(),'content':'PRIVATE LONG CONFIG'})
+        self.s.confirm(key);self.task=self.s.tasks()[0]['id']
+    async def asyncTearDown(self):self.s.close();self.j.close()
+    async def test_authorized_once_keeps_schedule_and_invalidates_old_button(self):
+        before=self.s.tasks();old,_=self.s.propose('run',self.task)
+        args={'action':'run','task':self.task,'authorized':True}
+        self.assertEqual((await self.ui.tool(args))['state'],'queued')
+        self.assertEqual((await self.ui.tool(args))['state'],'already_queued')
+        self.assertEqual(len(self.s.runs()),1);self.assertEqual(self.s.tasks(),before)
+        self.c.tg.say.assert_not_called();self.c.tg.buttons.assert_not_called()
+        with self.assertRaises(ValueError):self.s.confirm(old)
+        # Durable across reopen, including after the job finishes.
+        self.s.db.execute("UPDATE runs SET state='completed'");self.s.db.commit()
+        self.s.close();self.s=Schedules(self.root/'s');self.ui=ScheduleUI(self.s,self.c)
+        self.assertEqual((await self.ui.tool(args))['state'],'already_queued')
+        self.j.set('active_reply',124)
+        self.assertEqual((await self.ui.tool(args))['state'],'queued')
+    async def test_unapproved_is_compact_and_background_cannot_authorize(self):
+        result=await self.ui.tool({'action':'run','task':self.task})
+        self.assertEqual(result['state'],'awaiting_user_confirmation');self.assertFalse(self.s.runs())
+        self.assertNotIn('PRIVATE LONG CONFIG',self.c.tg.buttons.call_args.args[0])
+        self.c.interactive=False
+        with self.assertRaises(ValueError):await self.ui.tool({'action':'run','task':self.task,'authorized':True})
+    async def test_new_request_cannot_duplicate_pending_or_unknown_work(self):
+        args={'action':'run','task':self.task,'authorized':True}
+        await self.ui.tool(args);self.j.set('active_reply',125)
+        with self.assertRaises(ValueError):await self.ui.tool(args)
+        key,_=self.s.propose('run',self.task)
+        with self.assertRaises(ValueError):self.s.confirm(key)
+        self.s.db.execute("UPDATE runs SET state='unknown'");self.s.db.commit()
+        with self.assertRaises(ValueError):await self.ui.tool(args)
+        with self.assertRaises(ValueError):await self.ui.tool({**args,'task':'someone-else'})
+        with self.assertRaises(ValueError):await self.ui.tool({**args,'spec':sample()})
