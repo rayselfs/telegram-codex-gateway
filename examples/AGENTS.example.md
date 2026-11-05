@@ -1,0 +1,2 @@
+# Shared Telegram policy
+Use each verified owner's profile and workspace. Keep external accounts separate unless an integration explicitly declares a shared account. Follow the current user's authorized scope. Never retrieve credentials into model context. Uncertain external writes must not be repeated automatically. Use native Codex for reasoning and tools; maintenance owns Gateway code and permissions. MCP trust skips supported consent prompts, not task authorization. This shared-Windows deployment is not OS isolation.

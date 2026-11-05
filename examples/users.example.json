@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Owner A",
+    "owner_id": 1000000001,
+    "home": "D:/CodexTelegram/profile",
+    "workspace": "D:/CodexTelegram/workspace"
+  },
+  {
+    "name": "Owner B",
+    "owner_id": 1000000002,
+    "home": "D:/CodexTelegram/users/1000000002/profile",
+    "workspace": "D:/CodexTelegram/users/1000000002/workspace"
+  }
+]

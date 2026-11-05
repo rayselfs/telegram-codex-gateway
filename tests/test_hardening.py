@@ -1,0 +1,84 @@
+import asyncio
+import json
+import sys
+import time
+import unittest
+from types import SimpleNamespace as NS
+from unittest.mock import AsyncMock,patch
+from test_gateway import directory
+from state import Journal
+from transport import Transport
+from schedules import Schedules,validate,deadline
+from worker_supervisor import WorkerSupervisor
+from health_file import write_json
+from release import checked_files
+
+class HardeningTests(unittest.IsolatedAsyncioTestCase):
+    def test_release_blocks_completed_schedule_with_pending_notification(self):
+        from release import SCHEDULE_UNRESOLVED
+        store=Schedules(directory()/'s');self.addCleanup(store.close)
+        store.db.execute("INSERT INTO runs(id,state,notification) VALUES('fixture','completed','ready')")
+        self.assertIsNotNone(store.db.execute(SCHEDULE_UNRESOLVED).fetchone())
+        store.db.execute("UPDATE runs SET notification='delivered'")
+        self.assertIsNone(store.db.execute(SCHEDULE_UNRESOLVED).fetchone())
+    async def test_restoring_worker_rejects_input_without_dispatch(self):
+        from controller import Controller
+        from test_gateway import FakeRPC
+        root=directory();j=Journal(root/'j');self.addCleanup(j.close)
+        rpc=FakeRPC(root);tg=NS(say=AsyncMock())
+        c=Controller(rpc,tg,j,root);c.initializing=True
+        await c.start([{'type':'text','text':'fixture'}])
+        await c.handle('   ')
+        self.assertEqual(rpc.calls,[]);self.assertFalse(c.busy)
+        self.assertEqual(j.db.execute('SELECT count(*) FROM jobs').fetchone()[0],0)
+    async def test_partial_delivery_retains_receipt_and_never_retries_unknown(self):
+        root=directory();j=Journal(root/'journal');self.addCleanup(j.close)
+        tg=Transport('fake',1,root);tg.controller=NS(journal=j,thread='t',turn='r')
+        tg._bot=NS(send_message=AsyncMock(side_effect=[NS(message_id=11),TimeoutError()]))
+        with self.assertRaises(TimeoutError):await tg.say('x'*2100)
+        self.assertEqual(j.db.execute('SELECT part,state,receipt FROM outbound_chunks ORDER BY part').fetchall(),[(0,'delivered',11),(1,'unknown',None)])
+        self.assertEqual(tg._bot.send_message.await_count,2)
+    async def test_worker_budget_resets_only_after_one_healthy_hour(self):
+        j=Journal(directory()/'j');self.addCleanup(j.close)
+        s=WorkerSupervisor(j,AsyncMock(),AsyncMock());s.state['attempt']=2
+        await s.tick(failed=False,now=100);await s.tick(failed=False,now=3699)
+        self.assertEqual(s.state['attempt'],2)
+        await s.tick(failed=False,now=3700);self.assertEqual(s.state['attempt'],0)
+    def test_atomic_health_and_code_manifest_validation(self):
+        root=directory();p=root/'health.json';write_json(p,{'ready':True});self.assertEqual(json.loads(p.read_text()),{'ready':True})
+        self.assertFalse(list(root.glob('*.tmp')))
+        (root/'ok.py').write_text('x=1')
+        self.assertEqual(checked_files(root,['ok.py'])[0]['name'],'ok.py')
+        for name in ['../ok.py','auth.sqlite','D:/auth.json']:
+            with self.assertRaises(ValueError):checked_files(root,[name])
+    def test_grace_changes_expiry_without_changing_default(self):
+        spec={'name':'fake','kind':'reminder','content':'fixture','schedule':{'kind':'daily','time':'19:00'}}
+        validate(spec);self.assertEqual(deadline({'due':0,'spec':json.dumps(spec)}),900)
+        validate({**spec,'grace_minutes':60})
+        for v in [0,121,True]:
+            with self.assertRaises(ValueError):validate({**spec,'grace_minutes':v})
+    async def test_dynamic_preview_never_calls_sender(self):
+        from line_dynamic import execute
+        root=directory();store=Schedules(root/'s');self.addCleanup(store.close)
+        spec={'name':'preview','kind':'line_dynamic','recipient':'fixture','content':'query','preview':True,'schedule':{'kind':'daily','time':'19:00'}}
+        validate(spec);run={'id':'fixture','task':'fixture','due':time.time(),'spec':json.dumps(spec)}
+        with store.db:store.db.execute('INSERT INTO line_prepared VALUES(?,?)',('fixture','{"action":"send","text":"fixture"}'))
+        with patch('line_dynamic.send_line') as send:
+            state,result=await execute({'owner_id':1000000001},run,store)
+            self.assertEqual(state,'completed');self.assertIn('未發送',result);send.assert_not_called()
+    def test_real_guard_child_exits_are_bounded_and_persisted(self):
+        import gateway_guard
+        from pathlib import Path
+        root=directory();(root/'profile').mkdir();(root/'bridge').mkdir()
+        (root/'bridge/main.py').write_text('raise SystemExit(1)')
+        with patch.object(gateway_guard,'ROOT',root),patch.object(gateway_guard,'PYTHON',Path(sys.executable)),patch.object(gateway_guard.time,'sleep'):
+            gateway_guard.main()
+            saved=json.loads((root/'profile/guard-state.json').read_text())
+            self.assertEqual(saved['phase'],'exhausted');self.assertEqual(len(saved['restarts']),3)
+            with patch.object(gateway_guard.subprocess,'Popen') as spawn:
+                gateway_guard.main();spawn.assert_not_called()
+    def test_guard_respects_intentional_stop(self):
+        import gateway_guard
+        root=directory();(root/'profile').mkdir();(root/'profile/stop.request').touch()
+        with patch.object(gateway_guard,'ROOT',root),patch.object(gateway_guard.subprocess,'Popen') as spawn:
+            gateway_guard.main();spawn.assert_not_called()
