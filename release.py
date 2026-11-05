@@ -15,6 +15,9 @@ from lifecycle import SingleInstance
 from health_file import write_json
 
 SCHEDULE_UNRESOLVED = "SELECT 1 FROM runs WHERE state IN ('queued','running','unknown') OR notification IN ('ready','sending','unknown') UNION SELECT 1 FROM attachments WHERE state IN ('ready','sending','unknown')"
+CHAT_UNRESOLVED = """SELECT 1 FROM jobs WHERE state IN ('running','dispatching','compacting')
+ OR (state='unknown' AND (thread=COALESCE((SELECT json_extract(value,'$') FROM kv WHERE key='thread'),thread)))
+ UNION SELECT 1 FROM delivery WHERE state='pending'"""
 
 def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
 
@@ -53,7 +56,8 @@ def deploy(source,names):
         leases.append(SingleInstance(home/'release.lock'))
         for p in load_profiles(home/'users.json'):
             for lock in ('execution.lock','schedules/worker.lock'):leases.append(SingleInstance(p['home']/lock))
-            for relative,query in [('transport.sqlite',"SELECT 1 FROM jobs WHERE state IN ('running','dispatching','compacting','unknown') UNION SELECT 1 FROM delivery WHERE state='pending'"),
+            # Historical unknowns remain evidence; only the selected thread is resumed at startup.
+            for relative,query in [('transport.sqlite',CHAT_UNRESOLVED),
                                    ('schedules/schedules.sqlite',SCHEDULE_UNRESOLVED)]:
                 with sqlite3.connect((p['home']/relative).as_uri()+'?mode=ro',uri=True) as db:
                     if db.execute(query).fetchone():raise RuntimeError('Owner has unresolved work')

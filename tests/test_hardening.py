@@ -14,6 +14,18 @@ from health_file import write_json
 from release import checked_files
 
 class HardeningTests(unittest.IsolatedAsyncioTestCase):
+    def test_release_preserves_historical_unknown_without_blocking_new_idle_thread(self):
+        from release import CHAT_UNRESOLVED
+        j=Journal(directory()/'j');self.addCleanup(j.close)
+        j.job('old',None,'unknown')
+        self.assertIsNotNone(j.db.execute(CHAT_UNRESOLVED).fetchone())
+        j.set('thread','old')
+        self.assertIsNotNone(j.db.execute(CHAT_UNRESOLVED).fetchone())
+        j.set('thread','new');j.job('new','done','completed')
+        self.assertIsNone(j.db.execute(CHAT_UNRESOLVED).fetchone())
+        self.assertEqual(j.db.execute("SELECT state FROM jobs WHERE thread='old'").fetchone()[0],'unknown')
+        j.job('old','active','running')
+        self.assertIsNotNone(j.db.execute(CHAT_UNRESOLVED).fetchone())
     def test_release_blocks_completed_schedule_with_pending_notification(self):
         from release import SCHEDULE_UNRESOLVED
         store=Schedules(directory()/'s');self.addCleanup(store.close)
