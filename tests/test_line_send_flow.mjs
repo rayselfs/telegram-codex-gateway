@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import {EventEmitter,once} from 'node:events';
 import {chromium} from 'file:///D:/CodexTelegram/runtime/browser/node_modules/playwright/index.mjs';
-import {prepare,sendOnce} from '../line-send-flow.mjs';
+import {prepare,sendOnce,matchingMessages} from '../line-send-flow.mjs';
 import {acquireLineLease} from '../line-lease.mjs';
 const browser=await chromium.launch({executablePath:'D:/CodexTelegram/runtime/line/chromium/chrome.exe',headless:true});
 try{
@@ -36,6 +36,19 @@ try{
  await assert.rejects(sendOnce(page,unknown));assert.equal(await page.evaluate(()=>window.sends),1);
  page.waitForFunction=originalWait;
  await fixture();const changed=await prepare(page,'假 群組','假訊息');await page.getByRole('textbox',{name:'輸入訊息',exact:true}).fill('changed');await assert.rejects(sendOnce(page,changed),/changed/);assert.equal(await page.evaluate(()=>window.sends),0);
+ // Production-shaped emoji DOM, including existing same-text messages and a wrong emoji.
+ const emojiText='📣 假提醒\n第一場\n第二場\n謝謝。🙏';
+ await fixture();
+ await page.evaluate(text=>{
+  const render=e=>{const value=e.textContent;e.textContent='';for(const ch of value){if(['📣','🙏','🚫'].includes(ch)){const img=document.createElement('img');img.className='emoji native_emoji';img.alt=ch;e.append(img);}else e.append(document.createTextNode(ch));}};
+  const old=document.querySelector('[data-message-content]');old.textContent=text;render(old);
+  new MutationObserver(()=>{const el=document.querySelector('[data-message-id="local-fixture"] [data-message-content]');if(el&&!el.querySelector('img'))render(el);}).observe(document.body,{childList:true,subtree:true});
+ },emojiText);
+ const emojiPrepared=await prepare(page,'假 群組',emojiText);assert.deepEqual(emojiPrepared.before,['111']);
+ assert.equal(await sendOnce(page,emojiPrepared),'222');assert.equal(await page.evaluate(()=>window.sends),1);
+ assert.deepEqual(await page.evaluate(matchingMessages,{text:emojiText.replace('🙏','🚫')}),[]);
+ assert.deepEqual(await page.evaluate(matchingMessages,{text:emojiText,before:['111','222']}),[]);
+ console.log('EMOJI_RECEIPT_PASS: native image alt, exact content, existing IDs, changed emoji');
  console.log('OFFLINE_UI_PASS: exact unique group, draft, one send, old/local IDs excluded, ambiguity stops');
 }finally{await browser.close();}
 const folder='D:/CodexTelegram/test-state/line-lease-'+Date.now();await fs.mkdir(folder,{recursive:true});
