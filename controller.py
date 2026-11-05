@@ -20,7 +20,7 @@ HELP = '''我是 Codex Gateway，透過 Codex 協助你完成工作。
 /cron 查看排程；/cron 每天九點提醒我…… 建立排程（先 /new 載入新功能）
 /result 取回目前對話最近結果（可能重複交付）
 /get 相對路徑 下載工作區檔案
-/login notion 或 /login canva 登入自己的帳號 · /login_status 查連線 · /login_cancel 取消登入
+/login 服務名稱 登入本人已註冊的 MCP（如 notion、canva、xmind）· /login_status [服務名稱] 查連線 · /login_cancel 取消登入
 /trust 查看、信任或撤銷本人 MCP 服務
 /memory 查看及管理個人記憶 · /browser 查看瀏覽器使用方式
 可請我修復本人工具環境、製作或發布共用技能；更新後先 /new 載入這些能力。共用技能只有作者能透過發布工具更新。
