@@ -66,7 +66,7 @@ class DynamicLineTests(unittest.IsolatedAsyncioTestCase):
         with patch('rpc.Client',return_value=RPC(self.root)) as client,patch('lifecycle.ChildJob'),patch('autonomy_policy.configure',return_value=SimpleNamespace(close=lambda:None)),patch.object(Controller,'initialize',new_callable=AsyncMock),patch.object(Controller,'start',start),patch('managed_skills.extra_roots',return_value=[]):
             result=await generate(profile,self.run,self.store,capture=True)
             self.assertEqual(result,('completed','{"action":"send","text":"fixture"}'))
-            self.assertEqual(client.call_args.kwargs,{'browser':False})
+            self.assertEqual(client.call_args.kwargs,{'browser':False,'authorize':None})
             self.assertEqual(self.store.runs()[0]['state'],'running')
     def test_validation_and_strict_output(self):
         validate(self.spec)

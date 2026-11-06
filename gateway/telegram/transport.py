@@ -34,6 +34,12 @@ class Transport:
         self.login = None
         self.voice_task = None
 
+    members = None
+
+    def require_member(self):
+        if self.members is not None:
+            return self.members.require_active(self.owner)
+
     async def connect(self, *, is_reconnect=False):
         self._app = Application.builder().token(self.token).build()
         self._register_handlers(self._app)
@@ -106,12 +112,16 @@ class Transport:
         app.add_handler(MessageHandler(filters.ALL, self.route, block=False))
 
     async def route(self, update, context):
+        registration = getattr(self, 'registration', None)
+        if registration is not None and await registration.handle(update): return
         user = update.effective_user
         peer = self.peers.get(user.id) if user else None
         if peer and peer.authorized(update):
             await peer.ingress(update, context)
 
     async def typing_tick(self):
+        try: self.require_member()
+        except PermissionError: return
         c = self.controller
         if c and (c.busy or self.voice_task) and not c.pending and not c.unknown and not c.rpc.failure and not c.closed:
             await self.send_typing(str(self.owner))
@@ -131,6 +141,10 @@ class Transport:
         pass
 
     def authorized(self, update):
+        try:
+            self.require_member()
+        except PermissionError:
+            return False
         user, chat = update.effective_user, update.effective_chat
         return bool(user and chat and not user.is_bot and user.id == self.owner
                     and chat.type == 'private' and chat.id == self.owner)
@@ -232,6 +246,7 @@ class Transport:
                 self.controller.commands.release()
 
     async def receive_voice(self, attachment):
+        self.require_member()
         if self.voice_task:
             return await self.say('上一則語音仍在辨識；請稍後再傳，或用 /stop 取消。')
         if not attachment.file_size or attachment.file_size > MAX_INPUT or attachment.duration > 300:
@@ -260,6 +275,7 @@ class Transport:
             if size != attachment.file_size:
                 raise ValueError('Voice length mismatch')
             from voice import transcribe
+            self.require_member()
             text = await transcribe(dest)
             await self.say('語音辨識：'+text)
             inputs = [{'type':'text','text':'以下是使用者語音辨識內容；人名、金額或日期有疑義時先確認：\n'+text}]

@@ -1,3 +1,6 @@
+from bootstrap import CODE_ROOT
+from gateway.platforms import current
+process_options = current().process_options
 """Own one Gateway process; restart exits only, never replay a task or kill on health."""
 import json
 import subprocess
@@ -21,8 +24,8 @@ def main():
         # Refuse to compete with a Gateway launched outside this guard.
         probe=SingleInstance(home/'gateway.lock');probe.close()
         while not (home/'stop.request').exists() and not (home/'maintenance.request').exists():
-            proc=subprocess.Popen([str(PYTHON),'-B',str(ROOT/'bridge/main.py'),'serve'],
-                cwd=ROOT/'bridge',creationflags=subprocess.CREATE_NO_WINDOW)
+            proc=subprocess.Popen([str(PYTHON),'-B',str(CODE_ROOT/'main.py'),'serve'],
+                cwd=CODE_ROOT,**process_options())
             job=None
             try:
                 job=ChildJob(proc)

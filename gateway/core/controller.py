@@ -63,6 +63,25 @@ class Controller:
         self.recovery = Recovery(self)
         transport.controller = self
 
+    authorize = None
+
+    shared_policy = None
+    persona_revision = None
+
+    async def sync_persona(self, force=False):
+        if self.shared_policy is None: return
+        self.require_member()
+        revision = self.shared_policy.active_persona()
+        if self.thread and (force or self.journal.get('persona_version:'+self.thread) != revision['version']):
+            await self.rpc.call('thread/inject_items', {'threadId':self.thread, 'items':[
+                {'type':'message','role':'developer','content':[{'type':'input_text','text':revision['body']}]}]})
+            self.journal.set('persona_version:'+self.thread, revision['version'])
+        self.persona_revision = revision
+
+    def require_member(self):
+        if self.authorize is not None:
+            self.authorize()
+
     def acquire_execution(self):
         if self.execution_lock_path and self.execution_lease is None:
             from lifecycle import SingleInstance
@@ -132,6 +151,7 @@ class Controller:
         self.unknown = bool(self.journal.db.execute("SELECT 1 FROM jobs WHERE thread=? AND state='unknown'",
                                                    (tid,)).fetchone())
         self.journal.set('thread', tid)
+        await self.sync_persona(force=True)
 
     async def new(self):
         from personal_memory import TOOL as MEMORY_TOOL
@@ -149,6 +169,9 @@ class Controller:
         if self.self_help and self.interactive:
             from self_help import TOOL as SELF_HELP_TOOL
             params['dynamicTools'].append(SELF_HELP_TOOL)
+        if self.shared_policy is not None:
+            self.persona_revision = self.shared_policy.active_persona()
+            params['developerInstructions'] = self.persona_revision['body']
         data = await self.rpc.call('thread/start', params)
         self.check_permissions(data)
         self.thread = data['thread']['id']
@@ -156,6 +179,8 @@ class Controller:
         self.journal.set('thread', self.thread)
         self.journal.set('skill_pins:'+self.thread, pins)
         self.journal.set('unstarted_thread',self.thread)
+        if self.persona_revision is not None:
+            self.journal.set('persona_version:'+self.thread, self.persona_revision['version'])
         self.unknown = False
         if self.schedule_ui:
             self.journal.set('schedule:' + self.thread, True)
@@ -177,6 +202,7 @@ class Controller:
             raise RuntimeError('Codex did not grant the configured workspace permissions')
 
     async def start(self, inputs, recovery_model=None):
+        self.require_member()
         if self.initializing:return await self.tg.say('本人 worker 正在恢復，這則工作尚未提交；請稍後重送。')
         if self.busy or self.pending:
             await self.tg.say('工作進行中，未排入新工作；請用 /steer 或稍後重送。')
@@ -188,6 +214,12 @@ class Controller:
             self.acquire_execution()
         except RuntimeError:
             return await self.tg.say('你的排程工作正在執行，這則訊息尚未排入；請稍後再送。可用 /cron 查看排程。')
+        try:
+            await self.sync_persona()
+        except Exception:
+            self.release_execution()
+            await self.tg.say('共用指引待同步；尚未啟動本回合，請稍後重試。')
+            return
         self.busy = True
         if recovery_model is None:
             from transport import SOURCE_MESSAGE
@@ -235,6 +267,7 @@ class Controller:
                 + '\n本人目前明確保存的偏好：\n' + self.memory.context())
 
     async def steer(self, inputs, expected=None):
+        self.require_member()
         if self.recovery.waiting:
             # Preserve the recovery budget; new instructions are not a queued job.
             return await self.tg.say('目前正在等待自動接續，這則補充尚未插入。可等接續開始後再補充，或 /stop 取消後傳送新指示。')
@@ -252,6 +285,7 @@ class Controller:
         await self.tg.say('已補充到目前工作。')
 
     async def handle(self, text):
+        self.require_member()
         if self.initializing and (text.split() or [''])[0] not in ('/status','/stop'):
             return await self.tg.say('本人 worker 正在恢復，這則操作尚未提交；請稍後重送。')
         if not text.startswith('/') and self.busy:
@@ -400,6 +434,7 @@ class Controller:
             self.journal.job(self.thread, None, 'compacting')
             try:
                 await self.rpc.call('thread/compact/start', {'threadId': self.thread})
+                self.journal.set('persona_version:'+self.thread, None)
             except Exception:
                 self.busy, self.unknown = False, True
                 self.journal.job(self.thread, self.turn, 'unknown')
@@ -555,6 +590,11 @@ class Controller:
     async def sender(self):
         while not self.closed:
             job = await self.outbox.get()
+            while not self.closed:
+                try:
+                    self.require_member(); break
+                except PermissionError: await asyncio.sleep(1)
+            if self.closed: return
             try:
                 if job[0] == 'result':
                     await self.deliver_result(job[1], job[2], status=job[3], error=job[4])
@@ -623,6 +663,7 @@ class Controller:
         self.journal.delivery(key, 'delivered' if status in {'completed','failed','interrupted'} else 'unknown', receipts)
 
     async def server_request(self, request):
+        self.require_member()
         p, method = request.get('params', {}), request['method']
         if method == 'item/tool/call' and p.get('tool') == 'ezra_self_help':
             if (not self.self_help or p.get('threadId') != self.thread or
@@ -784,6 +825,7 @@ class Controller:
         return p
 
     async def callback(self, query):
+        self.require_member()
         try:
             if query.data.startswith('stop:'):
                 if not self.busy or query.data[5:] != self.stop_key:

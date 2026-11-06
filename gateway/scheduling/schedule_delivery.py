@@ -8,6 +8,10 @@ from transport import DELIVERY_REF
 
 async def deliver(store, tg):
     while not tg.controller.closed:
+        if getattr(tg, 'members', None) is not None:
+            try: tg.require_member()
+            except PermissionError:
+                await asyncio.sleep(1); continue
         if tg.health()=='ready':
             rows=store.db.execute("SELECT * FROM runs WHERE state NOT IN ('queued','running') AND notification='ready' ORDER BY created LIMIT 5").fetchall()
             for row in rows:

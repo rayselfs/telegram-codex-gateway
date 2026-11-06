@@ -16,6 +16,8 @@ runtime is not selected.
 """
 
 from __future__ import annotations
+from gateway.platforms import current
+process_options = current().process_options
 
 import json
 import os
@@ -99,7 +101,7 @@ class CodexAppServerClient:
             stderr=subprocess.PIPE,
             bufsize=0,
             env=spawn_env,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **process_options(),
         )
         self._next_id = 1
         self._pending: dict[int, _Pending] = {}

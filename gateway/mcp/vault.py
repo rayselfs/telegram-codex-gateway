@@ -1,7 +1,5 @@
 """Local DPAPI credential storage. No model-facing plaintext retrieval tool."""
 import base64
-import ctypes
-from ctypes import wintypes as w
 import json
 import os
 from pathlib import Path
@@ -11,25 +9,13 @@ import time
 import uuid
 from lifecycle import SingleInstance
 
-ROOT=Path('D:/CodexTelegram/secrets')
+from bootstrap import ROOT as DATA_ROOT
+ROOT=DATA_ROOT/'secrets'
 OWNERS={'system':'system'}
 # Numeric owners are supplied only by verified Gateway profile routing.
 
-def crypt(data,entropy,encrypt):
-    class Blob(ctypes.Structure):
-        _fields_=[('size',w.DWORD),('data',ctypes.POINTER(ctypes.c_byte))]
-    def blob(value):
-        buffer=ctypes.create_string_buffer(value)
-        return buffer,Blob(len(value),ctypes.cast(buffer,ctypes.POINTER(ctypes.c_byte)))
-    source_buffer,source=blob(data);entropy_buffer,extra=blob(entropy);output=Blob()
-    api=ctypes.windll.crypt32
-    ok=(api.CryptProtectData(ctypes.byref(source),None,ctypes.byref(extra),None,None,1,ctypes.byref(output)) if encrypt else
-        api.CryptUnprotectData(ctypes.byref(source),None,ctypes.byref(extra),None,None,1,ctypes.byref(output)))
-    if not ok:raise RuntimeError('Credential encryption/decryption unavailable for this owner and Windows account')
-    try:return ctypes.string_at(output.data,output.size)
-    finally:
-        ctypes.memset(output.data,0,output.size)
-        ctypes.windll.kernel32.LocalFree(output.data)
+from gateway.platforms import current
+crypt = current().crypt
 
 class Vault:
     def __init__(self,owner,root=ROOT):
@@ -42,7 +28,7 @@ class Vault:
         if not isinstance(name,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,62}',name):raise ValueError('Use a lowercase credential name with letters, digits and hyphens')
         path=self.folder/(name+'.json')
         for parent in (self.root,self.root/'users',self.folder,path):
-            if parent.exists() and parent.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:raise ValueError('Credential paths must not be redirected')
+            if parent.is_symlink() or parent.is_junction():raise ValueError('Credential paths must not be redirected')
         return path
 
     def put(self,name,value,purpose='',replace=False):

@@ -1,3 +1,4 @@
+from bootstrap import CODE_ROOT
 """Entry point. Only this process receives the independent home settings."""
 import argparse
 import asyncio
@@ -14,7 +15,7 @@ from bootstrap import isolate, ROOT, CODEX
 
 
 def verify_install():
-    lock = json.loads((ROOT / 'bridge/versions.json').read_text(encoding='utf-8-sig'))
+    lock = json.loads((CODE_ROOT / 'versions.json').read_text(encoding='utf-8-sig'))
     if hashlib.sha256(CODEX.read_bytes()).hexdigest() != lock['codex_sha256']:
         raise RuntimeError('Codex binary changed; rerun acceptance before starting')
     from importlib.metadata import version
@@ -38,7 +39,15 @@ async def serve(home):
     from worker_supervisor import WorkerSupervisor
     from worker_recovery import OfflineClient, quiesce, restore
     verify_install()
-    profiles = load_profiles(home / 'users.json')
+    from gateway.core.members import Members
+    if not (home/'members.sqlite').exists():
+        raise RuntimeError('Member registry migration or init required')
+    registry = Members(home/'members.sqlite', ROOT)
+    from gateway.core.shared_policy import SharedPolicy
+    shared_policy = SharedPolicy(registry)
+    if not registry.db.execute('SELECT 1 FROM shared_versions').fetchone():
+        shared_policy.import_initial('', 'admin_only')
+    profiles = registry.active_profiles()
     token = decrypt_token(home / 'telegram-token.dpapi')
     instance = SingleInstance(home / 'gateway.lock')
     stop = home / 'stop.request'
@@ -46,53 +55,82 @@ async def serve(home):
     resources, tasks = [], []
     connection = None
     started_at = time.time()
+    def build(profile):
+        item = {'profile': profile, 'members': registry}
+        resources.append(item)
+        rpc = item['rpc'] = OfflineClient()
+        item['job'] = None
+        tg = item['tg'] = Transport(token, profile['owner_id'], profile['home'] / 'inbox')
+        tg.members = registry
+        tg.display_name = profile['name']
+        journal = item['journal'] = Journal(profile['home'] / 'transport.sqlite')
+        controller = item['controller'] = Controller(rpc, tg, journal, profile['workspace'],
+            personal_instructions=profile['home']/'codex-home/AGENTS.md')
+        from autonomy_policy import configure
+        item['skills_store']=configure(controller,profile['owner_id'])
+        controller.shared_policy = shared_policy
+        controller.authorize = lambda owner=profile['owner_id']: registry.require_active(owner)
+        controller.execution_lock_path = profile['home'] / 'execution.lock'
+        item['availability'] = Availability(tg, journal)
+        schedules = item['schedules'] = Schedules(profile['home'] / 'schedules/schedules.sqlite')
+        with schedules.db:
+            schedules.db.execute("UPDATE runs SET notification='unknown' WHERE notification='sending'")
+            schedules.db.execute("UPDATE attachments SET state='unknown' WHERE state='sending'")
+        controller.schedule_ui = ScheduleUI(schedules, controller)
+        tg.login = ServiceLogin(tg, profile['home'])
+        # Cold startup honors persisted failure gates without spending budget on success.
+        return item
+
+    async def start_item(item):
+        tg, controller = item['tg'], item['controller']
+        tg._bot = connection._bot
+        tg.connection = connection
+        try:
+            await tg.install_menu()
+        except BadRequest as error:
+            if 'chat not found' not in str(error).lower():
+                raise
+            # A new owner may not have pressed Start on this Bot yet.
+        item['event_task'] = None
+        item['supervisor'] = WorkerSupervisor(item['journal'],
+            lambda item=item: quiesce(item), lambda item=item: restore(item))
+        from self_help import SelfHelp
+        controller.self_help=SelfHelp(controller,item['supervisor'])
+        item['recovery_task']=asyncio.create_task(item['supervisor'].start())
+        tasks.extend([asyncio.create_task(controller.sender()),
+                      asyncio.create_task(deliver_schedules(item['schedules'], tg)),
+                      asyncio.create_task(tg.typing_loop())])
+
+    async def attach(row):
+        owner = row['owner_id']
+        if owner in connection.peers: return
+        profile = {'owner_id':owner,'name':row['display_name'], 'home':Path(row['home']),'workspace':Path(row['workspace'])}
+        item = build(profile)
+        connection.peers[owner] = item['tg']
+        await start_item(item)
+
     try:
         for profile in profiles:
-            item = {'profile': profile}
-            resources.append(item)
-            rpc = item['rpc'] = OfflineClient()
-            item['job'] = None
-            tg = item['tg'] = Transport(token, profile['owner_id'], profile['home'] / 'inbox')
-            tg.display_name = profile['name']
-            journal = item['journal'] = Journal(profile['home'] / 'transport.sqlite')
-            controller = item['controller'] = Controller(rpc, tg, journal, profile['workspace'],
-                personal_instructions=profile['home']/'codex-home/AGENTS.md')
-            from autonomy_policy import configure
-            item['skills_store']=configure(controller,profile['owner_id'])
-            controller.execution_lock_path = profile['home'] / 'execution.lock'
-            item['availability'] = Availability(tg, journal)
-            schedules = item['schedules'] = Schedules(profile['home'] / 'schedules/schedules.sqlite')
-            with schedules.db:
-                schedules.db.execute("UPDATE runs SET notification='unknown' WHERE notification='sending'")
-                schedules.db.execute("UPDATE attachments SET state='unknown' WHERE state='sending'")
-            controller.schedule_ui = ScheduleUI(schedules, controller)
-            tg.login = ServiceLogin(tg, profile['home'])
-            # Cold startup honors persisted failure gates without spending budget on success.
-        connection = resources[0]['tg']
+            build(profile)
+        connection = resources[0]['tg'] if resources else Transport(token, 1, home/'registration-inbox')
+        connection.members = registry
         connection.peers = {r['profile']['owner_id']: r['tg'] for r in resources}
         # shortcut: private reconnect flag preserves pending updates; revalidate on Hermes upgrades.
         if not await connection.connect(is_reconnect=True):
             raise RuntimeError('Telegram connection failed')
+        from gateway.telegram.registration import Registration
+        from gateway.core.onboarding import login, check
+        async def send(owner, text):
+            for offset in range(0, max(1,len(text)), 3500):
+                await connection._bot.send_message(chat_id=owner, text=text[offset:offset+3500] or '（空白）')
+        connection.registration = Registration(registry, send,
+            lambda row: login(row, send, registry), lambda row: check(row, registry), attach, connection._bot.username, shared_policy=shared_policy)
         for item in resources:
-            tg, controller = item['tg'], item['controller']
-            tg._bot = connection._bot
-            tg.connection = connection
-            try:
-                await tg.install_menu()
-            except BadRequest as error:
-                if 'chat not found' not in str(error).lower():
-                    raise
-                # A new owner may not have pressed Start on this Bot yet.
-            item['event_task'] = None
-            item['supervisor'] = WorkerSupervisor(item['journal'],
-                lambda item=item: quiesce(item), lambda item=item: restore(item))
-            from self_help import SelfHelp
-            controller.self_help=SelfHelp(controller,item['supervisor'])
-            item['recovery_task']=asyncio.create_task(item['supervisor'].start())
-            tasks.extend([asyncio.create_task(controller.sender()),
-                          asyncio.create_task(deliver_schedules(item['schedules'], tg)),
-                          asyncio.create_task(tg.typing_loop())])
+            await start_item(item)
         while not stop.exists():
+            for profile in registry.active_profiles():
+                if profile['owner_id'] not in connection.peers:
+                    await attach(registry.require_active(profile['owner_id']))
             users = [{'name': r['profile']['name'], 'codex': 'offline' if r['rpc'].failure else 'ready',
                       'busy': r['controller'].busy, 'unknown': r['controller'].unknown,
                       'seen': r['tg'].seen_update, 'login_active': r['tg'].login.active} for r in resources]
@@ -108,6 +146,18 @@ async def serve(home):
             await asyncio.gather(*(r['availability'].update(
                 not r['rpc'].failure, 'Codex worker 連線異常。') for r in resources))
             for item in resources:
+                try:
+                    registry.require_active(item['profile']['owner_id'])
+                except PermissionError:
+                    if not item.get('suspended'):
+                        recovery_task=item.get('recovery_task')
+                        if recovery_task:
+                            recovery_task.cancel(); await asyncio.gather(recovery_task, return_exceptions=True)
+                        await quiesce(item)
+                        item['suspended']=True
+                    continue
+                if item.pop('suspended',False):
+                    item['recovery_task']=asyncio.create_task(restore(item))
                 recovery_task=item.get('recovery_task')
                 if recovery_task is None or recovery_task.done():
                     if recovery_task:
@@ -160,23 +210,52 @@ async def serve(home):
             if item.get('skills_store'):
                 item['skills_store'].close()
         instance.close()
+        registry.close()
         write_json(home/'health.json',{'time':time.time(),'telegram':'offline','codex':'offline'})
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['serve', 'login', 'check'])
+    parser.add_argument('action', choices=['serve', 'login', 'check', 'migrate-members', 'pairing-status', 'confirm-bootstrap', 'activate-bootstrap'])
     parser.add_argument('--owner', type=int)
+    parser.add_argument('--claim')
     args = parser.parse_args()
     home = isolate()
+    from gateway.core.members import Members
+    from gateway.core.init import Bootstrap
+    if args.action == 'migrate-members':
+        from profiles import load_profiles
+        registry=Members(home/'members.sqlite',ROOT)
+        try: registry.import_existing(load_profiles(home/'users.json'),args.owner)
+        finally: registry.close()
+        print('Member registry imported; existing runtime data untouched')
+        return 0
+    if args.action in {'pairing-status','confirm-bootstrap','activate-bootstrap'}:
+        registry=Members(home/'members.sqlite',ROOT)
+        try:
+            pairing=Bootstrap(registry)
+            if args.action=='pairing-status':
+                row=registry.db.execute('SELECT claim_id,owner,confirmed,consumed FROM bootstrap').fetchone()
+                print(json.dumps(dict(row) if row else {}))
+            elif args.action=='confirm-bootstrap':
+                pairing.confirm_bootstrap(args.claim,args.owner)
+            else:
+                from gateway.core.onboarding import check
+                row=registry.db.execute('SELECT owner FROM bootstrap WHERE claim_id=?',(args.claim,)).fetchone()
+                if not row: raise PermissionError('Unknown pairing claim')
+                ready=asyncio.run(check(registry.require_onboarding(row['owner']),registry))
+                pairing.activate(args.claim,lambda _:ready)
+        finally: registry.close()
+        return 0
     # No raw Hermes/httpx exception logs: Telegram URLs embed credentials.
     logging.disable(logging.CRITICAL)
     verify_install()
-    if args.action != 'serve' and (home / 'users.json').exists():
-        from profiles import load_profiles
-        profiles = load_profiles(home / 'users.json')
-        if args.owner is None:raise ValueError('--owner Telegram numeric ID is required for login/check')
-        home = next(p['home'] for p in profiles if p['owner_id'] == args.owner)
+    if args.action != 'serve':
+        if args.owner is None: raise ValueError('--owner is required')
+        from gateway.core.onboarding import authorize
+        registry=Members(home/'members.sqlite',ROOT)
+        try: home=Path(authorize(registry,args.owner)['home'])
+        finally: registry.close()
     if args.action == 'login':
         import os
         env = dict(os.environ, CODEX_HOME=str(home / 'codex-home'),

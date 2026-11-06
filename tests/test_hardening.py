@@ -83,7 +83,7 @@ class HardeningTests(unittest.IsolatedAsyncioTestCase):
         from pathlib import Path
         root=directory();(root/'profile').mkdir();(root/'bridge').mkdir()
         (root/'bridge/main.py').write_text('raise SystemExit(1)')
-        with patch.object(gateway_guard,'ROOT',root),patch.object(gateway_guard,'PYTHON',Path(sys.executable)),patch.object(gateway_guard.time,'sleep'):
+        with patch.object(gateway_guard,'ROOT',root),patch.object(gateway_guard,'CODE_ROOT',root/'bridge'),patch.object(gateway_guard,'PYTHON',Path(sys.executable)),patch.object(gateway_guard.time,'sleep'):
             gateway_guard.main()
             saved=json.loads((root/'profile/guard-state.json').read_text())
             self.assertEqual(saved['phase'],'exhausted');self.assertEqual(len(saved['restarts']),3)

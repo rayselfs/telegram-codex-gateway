@@ -2,8 +2,6 @@
 import json
 from pathlib import Path, PureWindowsPath
 import sqlite3
-import ctypes
-import msvcrt
 import uuid
 
 
@@ -24,15 +22,8 @@ def snapshot_file(root, relative, outbox):
     dest = outbox / (uuid.uuid4().hex + target.suffix[:16])
     with target.open('rb') as source:
         # Check the opened handle so a concurrent junction swap cannot export another path.
-        fn = ctypes.windll.kernel32.GetFinalPathNameByHandleW
-        fn.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32]
-        buf = ctypes.create_unicode_buffer(32768)
-        n = fn(msvcrt.get_osfhandle(source.fileno()), buf, len(buf), 0)
-        if not n or n >= len(buf):
-            raise ValueError('Cannot verify opened file location')
-        actual = buf.value
-        if actual.startswith('\\\\?\\'):
-            actual = actual[4:]
+        from gateway.platforms import current
+        actual = current().opened_path(source)
         if not Path(actual).resolve().is_relative_to(Path(root).resolve()):
             raise ValueError('Opened file escaped workspace')
         try:

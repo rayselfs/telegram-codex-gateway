@@ -1,3 +1,6 @@
+from bootstrap import CODE_ROOT
+from gateway.platforms import current
+process_options = current().process_options
 import asyncio
 import json
 import subprocess
@@ -10,9 +13,9 @@ async def transcribe(path):
     env.update(PYTHONUTF8='1', HF_HUB_OFFLINE='1', HF_HOME=str(ROOT/'runtime/voice-cache'),
                TEMP=str(path.parent), TMP=str(path.parent))
     proc = await asyncio.create_subprocess_exec(str(ROOT/'runtime/voice-venv/Scripts/python.exe'),
-        '-B', str(ROOT/'bridge/voice_transcribe.py'), str(path), env=env,
+        '-B', str(CODE_ROOT/'voice_transcribe.py'), str(path), env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW)
+        **process_options())
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=180)
         result = json.loads(out.decode('utf-8'))

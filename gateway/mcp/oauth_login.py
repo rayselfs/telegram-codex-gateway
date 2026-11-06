@@ -1,3 +1,5 @@
+from gateway.platforms import current
+process_options = current().process_options
 """Per-owner native Codex OAuth. Callback codes never enter model input or logs."""
 import asyncio
 import hmac
@@ -153,7 +155,7 @@ class ServiceLogin:
         try:
             self.proc = subprocess.Popen([str(CODEX), 'mcp', 'login', self.service, '--no-browser'],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                env=env, cwd=str(self.home), creationflags=subprocess.CREATE_NO_WINDOW)
+                env=env, cwd=str(self.home), **process_options())
             self.job = ChildJob(self.proc)
             proc, output = self.proc, self.output
             def read():

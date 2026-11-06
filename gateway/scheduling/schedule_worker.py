@@ -7,7 +7,8 @@ from pathlib import Path
 from bootstrap import isolate, ROOT
 
 
-async def execute(profile, run, store, *, capture=False):
+async def execute(profile, run, store, *, capture=False, members=None):
+    if members is not None: members.require_schedule(profile['owner_id'])
     from controller import Controller
     from rpc import Client
     from lifecycle import ChildJob
@@ -32,13 +33,17 @@ async def execute(profile, run, store, *, capture=False):
 
     folder = profile['home'] / 'schedules' / 'runs' / run['id']
     folder.mkdir(parents=True,exist_ok=False)
-    rpc = Client(profile['home'], browser=False); job = ChildJob(rpc._proc)
+    rpc = Client(profile['home'], browser=False, authorize=(lambda: members.require_schedule(profile['owner_id'])) if members else None); job = ChildJob(rpc._proc)
     journal = Journal(folder/'transport.sqlite'); output = Output()
     c = BackgroundController(rpc,output,journal,profile['workspace'],
         personal_instructions=profile['home']/'codex-home/AGENTS.md')
     from autonomy_policy import configure
     shared_store=configure(c,profile['owner_id'])
     c.interactive = False
+    if members is not None:
+        from gateway.core.shared_policy import SharedPolicy
+        c.shared_policy = SharedPolicy(members)
+        c.authorize = lambda: members.require_schedule(profile['owner_id'])
     import sqlite3
     with sqlite3.connect((profile['home']/'transport.sqlite').as_uri()+'?mode=ro', uri=True) as personal:
         memory = personal.execute("SELECT value FROM kv WHERE key='personal_memories'").fetchone()
@@ -93,7 +98,8 @@ async def execute(profile, run, store, *, capture=False):
         job.close();journal.close();shared_store.close()
 
 
-async def tick(profile):
+async def tick(profile, members=None):
+    if members is not None: members.require_schedule(profile['owner_id'])
     from schedules import Schedules
     from lifecycle import SingleInstance
     base=profile['home']/'schedules';base.mkdir(exist_ok=True)
@@ -108,6 +114,7 @@ async def tick(profile):
             with store.db:store.db.execute("UPDATE runs SET result='等待本人的前景工作釋放；到期超過設定期限則跳過。' WHERE state='queued'")
             return 'foreground_busy'
         try:
+            if members is not None: members.require_schedule(profile['owner_id'])
             run=store.claim()
             if not run:return 'idle'
             spec=json.loads(run['spec'])
@@ -124,7 +131,7 @@ async def tick(profile):
             elif spec['kind'] in {'m365_billing','media_failure','transcript_delivery'}:
                 store.finish(run['id'],'blocked','Site-specific integration is not installed.')
             else:
-                try:await execute(profile,run,store)
+                try:await execute(profile,run,store,members=members)
                 except Exception as error:
                     store.finish(run['id'],'unknown','執行未確認：'+type(error).__name__+'。未自動重試。')
             return 'processed'
@@ -139,10 +146,15 @@ def main():
     from main import verify_install
     from profiles import load_profiles
     verify_install()
-    rows=load_profiles(ROOT/'profile/users.json')
+    from gateway.core.members import Members
+    if not (ROOT/'profile/members.sqlite').exists(): raise RuntimeError('Member registry required')
+    members=Members(ROOT/'profile/members.sqlite',ROOT)
+    members.require_schedule(a.owner)
+    rows=members.active_profiles()
     profile=next((r for r in rows if r['owner_id']==a.owner),None)
     if profile is None:raise ValueError('Unknown owner')
-    result=asyncio.run(tick(profile))
+    try: result=asyncio.run(tick(profile,members))
+    finally: members.close()
     (profile['home']/'schedules/worker-health.json').write_text(json.dumps({'time':time.time(),'state':result}),encoding='utf-8')
 
 

@@ -8,7 +8,9 @@ from bootstrap import CODEX
 
 
 class Client(CodexAppServerClient):
-    def __init__(self, home, *, browser=True):
+    def __init__(self, home, *, browser=True, authorize=None):
+        self.authorize = authorize
+        if authorize is not None: authorize()
         self._write_lock = threading.Lock()
         self._id_lock = threading.Lock()
         self.failure = None
@@ -70,4 +72,7 @@ class Client(CodexAppServerClient):
                 p.queue.put_nowait({'error': {'code': -32099, 'message': self.failure}})
 
     async def call(self, method, params=None):
+        if method in {'turn/start', 'turn/steer', 'thread/compact/start'}:
+            authorize = getattr(self, 'authorize', None)
+            if authorize is not None: authorize()
         return await asyncio.to_thread(self.request, method, params, 30)

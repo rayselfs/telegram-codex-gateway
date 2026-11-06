@@ -34,7 +34,8 @@ async def restore(item):
     rpc=None;job=None
     c.initializing=True
     try:
-        rpc=Client(item['profile']['home']);job=ChildJob(rpc._proc)
+        authorize = (lambda: item['members'].require_active(item['profile']['owner_id'])) if item.get('members') else None
+        rpc=Client(item['profile']['home'], authorize=authorize);job=ChildJob(rpc._proc)
         await asyncio.to_thread(rpc.initialize,'ezra_worker_recovery','Codex Gateway worker','1',{'experimentalApi':True})
         config=(await rpc.call('config/read',{}))['config']
         if config.get('features',{}).get('apps') is not False or config.get('mcp_oauth_credentials_store')!='file':

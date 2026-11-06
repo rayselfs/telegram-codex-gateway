@@ -1,3 +1,4 @@
+from bootstrap import CODE_ROOT
 """Idle-only code deployment and rollback. Database snapshots are evidence, never restored."""
 import argparse
 import ctypes
@@ -37,7 +38,7 @@ def terminate_gateway(pid):
 
 def deploy(source,names,*,rollback=None):
     rows=checked_files(source,names) if rollback is None else []
-    home=ROOT/'profile';target=ROOT/'bridge'
+    home=ROOT/'profile';target=CODE_ROOT
     evidence=ROOT/'evidence'/('release-'+str(time.time_ns()));evidence.mkdir(parents=True)
     leases=[];stopped=False;copied=False;hold=home/'maintenance.request';owns_hold=False
     try:
