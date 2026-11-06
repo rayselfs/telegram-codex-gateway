@@ -1,19 +1,9 @@
-"""User-approved shared Windows identity policy (2026-11-03).
+"""Compatibility entry point; existing deployment paths remain valid."""
+import importlib
+import runpy
+import sys
 
-Profile/owner separation is application routing, not an OS security boundary.
-Native commands use the current non-elevated Windows user's rights; no UAC broker.
-"""
-from pathlib import Path
-
-PERMISSION_MODE='workspace-write'
-SHARED_STORE=Path('D:/CodexShared/published-v1')
-
-
-def configure(controller,owner_id,*,root=SHARED_STORE):
-    from autonomy_tools import SkillTools
-    from shared_skills import SkillStore
-    if type(owner_id) is not int or owner_id<=0:raise ValueError('Verified Telegram owner required')
-    store=SkillStore(root)
-    controller.permission_mode=PERMISSION_MODE
-    controller.shared_skills=SkillTools(store,owner_id,enabled=True)
-    return store
+if __name__ == "__main__":
+    runpy.run_module("gateway.core.autonomy_policy", run_name="__main__")
+else:
+    sys.modules[__name__] = importlib.import_module("gateway.core.autonomy_policy")

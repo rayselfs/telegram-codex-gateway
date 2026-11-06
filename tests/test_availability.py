@@ -23,7 +23,7 @@ class AvailabilityTests(IsolatedAsyncioTestCase):
         from pathlib import Path
         from types import SimpleNamespace
         # Execute the real main-loop notification call with controlled health inputs.
-        tree=ast.parse((Path(__file__).parents[1]/'main.py').read_text(encoding='utf-8'))
+        tree=ast.parse((Path(__file__).parents[1]/'gateway/core/main.py').read_text(encoding='utf-8'))
         call=next(n for n in ast.walk(tree) if isinstance(n,ast.Await)
                   and "r['availability'].update" in ast.unparse(n)
                   and "force=True" not in ast.unparse(n))
