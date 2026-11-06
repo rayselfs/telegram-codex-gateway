@@ -69,15 +69,6 @@ class HardeningTests(unittest.IsolatedAsyncioTestCase):
         validate({**spec,'grace_minutes':60})
         for v in [0,121,True]:
             with self.assertRaises(ValueError):validate({**spec,'grace_minutes':v})
-    async def test_dynamic_preview_never_calls_sender(self):
-        from line_dynamic import execute
-        root=directory();store=Schedules(root/'s');self.addCleanup(store.close)
-        spec={'name':'preview','kind':'line_dynamic','recipient':'fixture','content':'query','preview':True,'schedule':{'kind':'daily','time':'19:00'}}
-        validate(spec);run={'id':'fixture','task':'fixture','due':time.time(),'spec':json.dumps(spec)}
-        with store.db:store.db.execute('INSERT INTO line_prepared VALUES(?,?)',('fixture','{"action":"send","text":"fixture"}'))
-        with patch('line_dynamic.send_line') as send:
-            state,result=await execute({'owner_id':1000000001},run,store)
-            self.assertEqual(state,'completed');self.assertIn('未發送',result);send.assert_not_called()
     def test_real_guard_child_exits_are_bounded_and_persisted(self):
         import gateway_guard
         from pathlib import Path

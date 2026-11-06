@@ -1,5 +1,5 @@
 """Fixed current-worker operations, with no arbitrary broker command runner."""
-TOOL={'type':'function','name':'ezra_self_help',
+TOOL={'type':'function','name':'gateway_self_help',
       'description':'Inspect own worker health, reload skills, reconnect own configured tools, or request own worker restart after the current turn ends. Repair scripts/dependencies directly in your personal workspace/venv, never in the shared runtime.',
       'inputSchema':{'type':'object','properties':{'action':{'type':'string','enum':[
           'health','reload_skills','reconnect_tools','request_restart']}},

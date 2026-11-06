@@ -9,7 +9,7 @@ from test_gateway import directory, FakeRPC
 from controller import Controller
 from state import Journal
 from lifecycle import SingleInstance
-from schedules import Schedules, ScheduleUI, validate, next_time, TAIPEI
+from schedules import Schedules, ScheduleUI, validate, next_time, LOCAL_ZONE as TAIPEI
 
 
 def sample():
@@ -88,7 +88,7 @@ class ScheduleTests(unittest.TestCase):
 class ScheduleControllerTests(unittest.IsolatedAsyncioTestCase):
     async def test_tick_waits_for_foreground_and_does_not_repeat(self):
         from schedule_worker import tick
-        root=directory();profile={'home':root,'workspace':root,'name':'test'}
+        root=directory();profile={'home':root,'workspace':root,'name':'test','owner_id':101}
         store=Schedules(root/'schedules/schedules.sqlite')
         key,_=store.propose('create',spec=sample());store.confirm(key)
         with store.db:store.db.execute('UPDATE tasks SET next=?',(time.time()-1,))
@@ -121,7 +121,7 @@ class ScheduleControllerTests(unittest.IsolatedAsyncioTestCase):
         tg=NS(say=AsyncMock(),buttons=AsyncMock(),display_name='User A')
         c=Controller(FakeRPC(root),tg,journal,root);c.schedule_ui=ScheduleUI(s,c)
         c.thread='thread1';c.turn='turn1'
-        p={'tool':'ezra_schedule','threadId':'wrong','turnId':'turn1','arguments':{'action':'create','spec':sample()}}
+        p={'tool':'gateway_schedule','threadId':'wrong','turnId':'turn1','arguments':{'action':'create','spec':sample()}}
         await c.server_request({'id':1,'method':'item/tool/call','params':p})
         self.assertFalse(s.tasks());self.assertTrue(c.rpc.errors)
         p['threadId']='thread1'

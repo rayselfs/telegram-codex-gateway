@@ -34,9 +34,9 @@ async def restore(item):
     rpc=None;job=None
     c.initializing=True
     try:
-        authorize = (lambda: item['members'].require_active(item['profile']['owner_id'])) if item.get('members') else None
+        authorize = c.authorize if item.get('members') else None
         rpc=Client(item['profile']['home'], authorize=authorize);job=ChildJob(rpc._proc)
-        await asyncio.to_thread(rpc.initialize,'ezra_worker_recovery','Codex Gateway worker','1',{'experimentalApi':True})
+        await asyncio.to_thread(rpc.initialize,'gateway_worker_recovery','Codex Gateway worker','1',{'experimentalApi':True})
         config=(await rpc.call('config/read',{}))['config']
         if config.get('features',{}).get('apps') is not False or config.get('mcp_oauth_credentials_store')!='file':
             raise RuntimeError('Per-user external account isolation unavailable')

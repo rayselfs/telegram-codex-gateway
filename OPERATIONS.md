@@ -1,23 +1,13 @@
 # Operations
 
-## Health and recovery
+Every entry point uses the same absolute `deployment.json`. Windows wrappers accept `-Config`; Python commands accept `--config`. Start and Stop request lifecycle changes; inspect private `profile/health.json` for completion. Different deployments have distinct job names and local locks; a same-bot lock additionally prevents competing polling from different data roots under the same host identity.
 
-`Start.ps1` launches `gateway_guard.py`, which owns the Gateway child process and its process tree. The guard retries unexpected exits after 15 seconds, at most three times in a rolling hour, and persists an exhausted state. `stop.request` and `maintenance.request` suppress restarts. It does not kill a busy or hung process because a network check fails. Worker recovery is per owner; its budget resets only after an hour of healthy operation. Model-overload recovery remains separate and bounded: two Sol attempts, two Terra attempts, one Astra attempt, with 15-second waits.
+Background operation requires the host user to be logged in. No pre-login, logout or sleep availability is promised. Due occurrences retain their grace deadlines and receipts after wake; expired work is skipped rather than blindly replayed. Daily/weekly time uses the saved IANA timezone. Nonexistent DST wall times are skipped; the repeated hour does not create a second daily occurrence.
 
-Read fresh `profile/health.json`, not just process presence. `ready` is connection health, not confirmation that an owner's previous task succeeded. `unknown` means inspect native task history and external receipts; do not automatically rerun. The owner can use `/result` to retrieve results (possibly duplicating their delivery) and `/new` to explicitly start a new conversation. Preserve old evidence.
+Delivery reservations precede external sends. Unknown results require reconciliation; do not rerun work to repair a notification. Persona notifications retain per-recipient pending/sending/delivered/unknown state and are not resent after ambiguity. `/persona` remains available to read the exact proposal and hash.
 
-## Delivery and schedules
+Code releases require fresh idle health and all owner execution/worker locks. The code-only release manifest rejects path aliases and traversal. The gateway is asked to stop gracefully before replacement; uncertainty stops the release. Backups are evidence, never an instruction to restore live journals. Partial copy failures restore code; a startup health failure requires inspection.
 
-`outbound_chunks` records each reserved text chunk, digest and Telegram receipt. An ambiguous chunk stays unknown and is not retried automatically. A multi-part answer can be partially delivered; an overall error does not imply no message was sent.
+Rollback must retain current member decisions, new receipts and all post-cutover data. An older version needing users.json must receive an active-only compatibility export generated from the latest registry while workers are stopped. Unsupported new members/capabilities remain disabled. Never restore a historical users.json or database over current authorization and delivery evidence.
 
-Schedules use the owner's execution lock. Busy jobs wait with a reason until the configured `grace_minutes` deadline (default 15, allowed 1–120), then expire. Execution and notification states are separate. Never rerun an external job just to fix its notification.
-
-Dynamic LINE schedules generate a strict send/skip/error result with native Codex. `preview: true` saves and reports the prepared text without invoking the LINE sender. Preview does not verify that a query was semantically complete or that the source permissions were correct. Review source evidence and content before enabling a real daily send. The sender checks the exact unique destination, verifies a new outgoing message ID and clears the input; uncertainty pauses the schedule.
-
-## Maintenance release
-
-Use `release.py --source STAGED_DIRECTORY --files FILE ...` from the deployment's maintenance environment. It requires fresh idle health, no login or unknown work, no unresolved jobs or notifications, and all owner/scheduler/LINE locks. It snapshots SQLite with the backup API and records code hashes before stopping the exact Gateway process under a maintenance hold. Keep release evidence private.
-
-Copy failures restore previous code. A post-start health timeout requires investigation; it is not an automatic rollback. `release.py --rollback EVIDENCE_DIRECTORY` restores prior existing code through the same idle gates, not databases. New files may remain unused after rollback. Never overwrite live journals with old backups to make statuses look healthy.
-
-Check both owners, schedule delivery and external authorization after a release. Reboot/login startup, live message delivery, and real external-service consent require explicit acceptance; offline tests cannot substitute for them.
+Installing or taking over OS background jobs is an explicit host operation. Existing jobs with mismatched commands are not replaced automatically. Migration must record old job names, disable old launchers before enabling replacements, and preserve owner task IDs, next due times and receipts. Native job takeover/wake acceptance is still required before release.

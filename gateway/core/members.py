@@ -33,6 +33,7 @@ class Members:
             id INTEGER PRIMARY KEY, at REAL NOT NULL, actor INTEGER NOT NULL,
             subject INTEGER NOT NULL, action TEXT NOT NULL, reason TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS member_epoch (singleton INTEGER PRIMARY KEY CHECK(singleton=1), value INTEGER NOT NULL);
+          CREATE TABLE IF NOT EXISTS suspension_origin(owner INTEGER PRIMARY KEY, state TEXT NOT NULL);
           INSERT OR IGNORE INTO member_epoch VALUES(1,0);
         ''')
 
@@ -89,12 +90,14 @@ class Members:
             seen.add(owner)
             for key in ('home', 'workspace'):
                 p = Path(row[key])
-                if not p.is_absolute() or p == self.root or not p.is_relative_to(self.root):
+                if not p.is_absolute() or '..' in p.parts or p == self.root or not p.is_relative_to(self.root):
                     raise ValueError('Member path must remain inside deployment')
                 for part in (p, *p.parents):
                     if part.is_symlink() or part.is_junction():
                         raise ValueError('Member paths must not be redirected')
                 p = p.resolve()
+                if p == self.root.resolve() or not p.is_relative_to(self.root.resolve()):
+                    raise ValueError('Member path escapes deployment')
                 if any(p.is_relative_to(other) or other.is_relative_to(p) for other in paths):
                     raise ValueError('Member directories overlap')
                 paths.append(p)
@@ -210,6 +213,7 @@ class Members:
             row = self._member(owner)
             if row['role'] == 'admin': raise PermissionError('Cannot suspend the administrator')
             if row['state'] != 'suspended':
+                self.db.execute('INSERT OR REPLACE INTO suspension_origin VALUES(?,?)',(owner,row['state']))
                 self.db.execute("UPDATE members SET state='suspended',schedules_paused=1 WHERE owner_id=?", (owner,))
                 self._changed(); self._audit(actor, owner, 'suspend', reason)
 
@@ -220,7 +224,9 @@ class Members:
             row = self._member(owner)
             if row['state'] != 'suspended' or not row['provisioned']:
                 raise PermissionError('Previously provisioned suspended member required')
-            self.db.execute("UPDATE members SET state='active',schedules_paused=1 WHERE owner_id=?", (owner,))
+            previous=self.db.execute('SELECT state FROM suspension_origin WHERE owner=?',(owner,)).fetchone()
+            state='active' if previous and previous['state']=='active' else 'pending'
+            self.db.execute("UPDATE members SET state=?,schedules_paused=1 WHERE owner_id=?", (state,owner))
             self._changed(); self._audit(actor, owner, 'restore', reason)
 
     def resume_own_schedules(self, owner):

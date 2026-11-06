@@ -111,3 +111,36 @@ def delete_secret(reference, entropy):
 
 def decrypt_token(path):
     return crypt(Path(path).read_bytes(), b'', False).decode('utf-8')
+
+
+class BotInstance(SingleInstance):
+    def __init__(self,token,*,lock_root=None):
+        bot=token.partition(':')[0]
+        if not bot.isascii() or not bot.isdigit() or ':' not in token:raise ValueError('Invalid bot identity')
+        root=Path(lock_root) if lock_root is not None else Path.home()/'Library/Caches/telegram-codex-gateway/bots'
+        for part in (root,*root.parents):
+            if part.is_symlink():raise RuntimeError('Bot lock directory is redirected')
+        root.mkdir(parents=True,exist_ok=True)
+        super().__init__(root/(hashlib.sha256(bot.encode()).hexdigest()+'.lock'))
+
+
+def install_background(jobs):
+    import plistlib,subprocess
+    root=Path.home()/'Library/LaunchAgents'
+    for part in (root,*root.parents):
+        if part.is_symlink():raise RuntimeError('LaunchAgent directory is redirected')
+    root.mkdir(parents=True,exist_ok=True)
+    for job in jobs:
+        definition={'Label':job['name'],'ProgramArguments':[job['python'],*job['arguments']],
+            'WorkingDirectory':job['cwd'],'ProcessType':'Background','RunAtLoad':job['interval'] is None}
+        if job['interval']:definition['StartInterval']=job['interval']
+        path=root/(job['name']+'.plist')
+        if path.is_symlink():raise RuntimeError('LaunchAgent file is redirected')
+        if path.exists():
+            if plistlib.loads(path.read_bytes())!=definition:raise RuntimeError('Existing LaunchAgent binding differs; inspect before takeover')
+        else:
+            with path.open('xb') as out:plistlib.dump(definition,out)
+        domain='gui/'+str(os.getuid())
+        loaded=subprocess.run(['/bin/launchctl','print',domain+'/'+job['name']],capture_output=True,timeout=10)
+        if loaded.returncode:
+            subprocess.run(['/bin/launchctl','bootstrap',domain,str(path)],check=True,capture_output=True,timeout=20)

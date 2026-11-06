@@ -5,7 +5,7 @@ process_options = current().process_options
 import json
 import subprocess
 import time
-from bootstrap import ROOT,PYTHON
+from bootstrap import ROOT,PYTHON,child_environment
 from lifecycle import SingleInstance,ChildJob
 from health_file import write_json
 
@@ -25,7 +25,7 @@ def main():
         probe=SingleInstance(home/'gateway.lock');probe.close()
         while not (home/'stop.request').exists() and not (home/'maintenance.request').exists():
             proc=subprocess.Popen([str(PYTHON),'-B',str(CODE_ROOT/'main.py'),'serve'],
-                cwd=CODE_ROOT,**process_options())
+                cwd=CODE_ROOT,env=child_environment(),**process_options())
             job=None
             try:
                 job=ChildJob(proc)

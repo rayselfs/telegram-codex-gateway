@@ -47,9 +47,17 @@ async def serve(home):
     shared_policy = SharedPolicy(registry)
     if not registry.db.execute('SELECT 1 FROM shared_versions').fetchone():
         shared_policy.import_initial('', 'admin_only')
+    from gateway.core.capabilities import Capabilities, CapabilityTools
+    capabilities = Capabilities(registry)
+    from gateway.mcp.presets import Presets
+    mcp_policy=Presets(registry)
     profiles = registry.active_profiles()
     token = decrypt_token(home / 'telegram-token.dpapi')
     instance = SingleInstance(home / 'gateway.lock')
+    from gateway.platforms import current
+    try: bot_instance=current().BotInstance(token)
+    except BaseException:
+        instance.close();registry.close();raise
     stop = home / 'stop.request'
     stop.unlink(missing_ok=True)
     resources, tasks = [], []
@@ -69,15 +77,16 @@ async def serve(home):
         from autonomy_policy import configure
         item['skills_store']=configure(controller,profile['owner_id'])
         controller.shared_policy = shared_policy
-        controller.authorize = lambda owner=profile['owner_id']: registry.require_active(owner)
+        if capabilities.handlers: controller.capability_tools = CapabilityTools(capabilities,profile['owner_id'])
+        controller.authorize = lambda owner=profile['owner_id']: mcp_policy.authorize_runtime(owner)
         controller.execution_lock_path = profile['home'] / 'execution.lock'
         item['availability'] = Availability(tg, journal)
-        schedules = item['schedules'] = Schedules(profile['home'] / 'schedules/schedules.sqlite')
+        schedules = item['schedules'] = Schedules(profile['home'] / 'schedules/schedules.sqlite',members=registry,owner=profile['owner_id'],capabilities=capabilities)
         with schedules.db:
             schedules.db.execute("UPDATE runs SET notification='unknown' WHERE notification='sending'")
             schedules.db.execute("UPDATE attachments SET state='unknown' WHERE state='sending'")
         controller.schedule_ui = ScheduleUI(schedules, controller)
-        tg.login = ServiceLogin(tg, profile['home'])
+        tg.login = ServiceLogin(tg, profile['home'],policy=mcp_policy)
         # Cold startup honors persisted failure gates without spending budget on success.
         return item
 
@@ -101,9 +110,19 @@ async def serve(home):
                       asyncio.create_task(deliver_schedules(item['schedules'], tg)),
                       asyncio.create_task(tg.typing_loop())])
 
+    attach_failed=set()
     async def attach(row):
         owner = row['owner_id']
         if owner in connection.peers: return
+        from bootstrap import CONFIG
+        if (home/'background-installed').exists():
+            if CONFIG is None:raise RuntimeError('Background setup requires a persistent deployment configuration')
+            from gateway.core.background import definitions
+            try:await asyncio.to_thread(current().install_background,definitions(CONFIG,[row],owner=owner))
+            except Exception:
+                attach_failed.add(owner)
+                raise RuntimeError('Owner background registration needs retry; existing workers remain active') from None
+        attach_failed.discard(owner)
         profile = {'owner_id':owner,'name':row['display_name'], 'home':Path(row['home']),'workspace':Path(row['workspace'])}
         item = build(profile)
         connection.peers[owner] = item['tg']
@@ -121,16 +140,21 @@ async def serve(home):
         from gateway.telegram.registration import Registration
         from gateway.core.onboarding import login, check
         async def send(owner, text):
+            receipts=[]
             for offset in range(0, max(1,len(text)), 3500):
-                await connection._bot.send_message(chat_id=owner, text=text[offset:offset+3500] or '（空白）')
+                message=await connection._bot.send_message(chat_id=owner, text=text[offset:offset+3500] or '（空白）')
+                receipts.append(message.message_id)
+            return receipts
         connection.registration = Registration(registry, send,
             lambda row: login(row, send, registry), lambda row: check(row, registry), attach, connection._bot.username, shared_policy=shared_policy)
+        connection.registration.extensions['/mcp']=mcp_policy.command
         for item in resources:
             await start_item(item)
         while not stop.exists():
             for profile in registry.active_profiles():
-                if profile['owner_id'] not in connection.peers:
-                    await attach(registry.require_active(profile['owner_id']))
+                if profile['owner_id'] not in connection.peers and profile['owner_id'] not in attach_failed:
+                    try:await attach(registry.require_active(profile['owner_id']))
+                    except Exception:attach_failed.add(profile['owner_id'])
             users = [{'name': r['profile']['name'], 'codex': 'offline' if r['rpc'].failure else 'ready',
                       'busy': r['controller'].busy, 'unknown': r['controller'].unknown,
                       'seen': r['tg'].seen_update, 'login_active': r['tg'].login.active} for r in resources]
@@ -138,7 +162,7 @@ async def serve(home):
                       'poll_failures': connection.poll_failures, 'last_poll_error': connection.last_poll_error,
                       'poll_age_seconds': (round(time.monotonic()-connection._polling_last_progress_monotonic,1)
                           if connection._polling_last_progress_monotonic else None), 'telegram': connection.health(),
-                      'codex': 'ready' if all(u['codex']=='ready' for u in users) else 'offline',
+                      'codex': 'ready' if users and all(u['codex']=='ready' for u in users) else 'offline',
                       'busy': any(u['busy'] for u in users),
                       'login_active': any(u['login_active'] for u in users),
                       'unknown': any(u['unknown'] for u in users), 'users': users}
@@ -192,6 +216,7 @@ async def serve(home):
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         if connection:
+            if getattr(connection,'registration',None):await connection.registration.close()
             try:
                 await asyncio.wait_for(connection.disconnect(), timeout=20)
             except Exception:
@@ -210,6 +235,7 @@ async def serve(home):
             if item.get('skills_store'):
                 item['skills_store'].close()
         instance.close()
+        bot_instance.close()
         registry.close()
         write_json(home/'health.json',{'time':time.time(),'telegram':'offline','codex':'offline'})
 
@@ -226,7 +252,8 @@ def main():
     if args.action == 'migrate-members':
         from profiles import load_profiles
         registry=Members(home/'members.sqlite',ROOT)
-        try: registry.import_existing(load_profiles(home/'users.json'),args.owner)
+        from gateway.core.migration import migrate
+        try: migrate(registry,load_profiles(home/'users.json'),args.owner)
         finally: registry.close()
         print('Member registry imported; existing runtime data untouched')
         return 0

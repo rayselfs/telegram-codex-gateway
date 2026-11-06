@@ -24,6 +24,9 @@ class SharedPolicy:
           CREATE TABLE IF NOT EXISTS shared_votes (
             proposal TEXT NOT NULL, owner INTEGER NOT NULL, decision INTEGER NOT NULL,
             PRIMARY KEY(proposal,owner));
+          CREATE TABLE IF NOT EXISTS shared_notifications (
+            proposal TEXT NOT NULL, owner INTEGER NOT NULL, hash TEXT NOT NULL,
+            state TEXT NOT NULL, receipt TEXT, PRIMARY KEY(proposal,owner));
         ''')
 
     def import_initial(self,body,policy='admin_only'):
@@ -56,7 +59,34 @@ class SharedPolicy:
                 (proposal,actor_id,base_version,body,policy,digest,json.dumps(electorate),self.members.epoch,
                  (time.time() if now is None else now)+604800,'pending'))
             self.members._audit(actor_id,actor_id,'shared_proposal',proposal)
+            self.db.executemany('INSERT INTO shared_notifications VALUES(?,?,?,?,NULL)',
+                [(proposal,owner,digest,'pending') for owner in electorate])
             return self.view(actor_id,proposal)
+
+    async def notify(self,actor_id,proposal_id,send):
+        proposal=self.view(actor_id,proposal_id)
+        for row in self.db.execute('SELECT owner FROM shared_notifications WHERE proposal=? ORDER BY owner',(proposal_id,)).fetchall():
+            owner=row['owner']
+            with self.members.transaction():
+                self.members.require_active(actor_id)
+                try:self.members.require_active(owner)
+                except PermissionError:continue
+                claimed=self.db.execute("UPDATE shared_notifications SET state='sending' WHERE proposal=? AND owner=? AND hash=? AND state='pending'",
+                    (proposal_id,owner,proposal['hash'])).rowcount
+            if not claimed:continue
+            try:
+                receipt=await send(owner,'共用指引提案 '+proposal_id+'\n政策 '+proposal['policy']+'\n雜湊 '+proposal['hash']+'\n'+proposal['body'])
+                self.db.execute("UPDATE shared_notifications SET state='delivered',receipt=? WHERE proposal=? AND owner=?",
+                    (json.dumps(receipt),proposal_id,owner))
+            except Exception:
+                self.db.execute("UPDATE shared_notifications SET state='unknown' WHERE proposal=? AND owner=?",(proposal_id,owner))
+        return self.view(actor_id,proposal_id)
+
+    def propose_rollback(self,actor_id,base_version,version):
+        self.members.require_active(actor_id)
+        row=self.db.execute('SELECT body,policy FROM shared_versions WHERE version=?',(version,)).fetchone()
+        if not row:raise ValueError('Unknown historical revision')
+        return self.propose(actor_id,base_version,row['body'],policy=row['policy'])
 
     def view(self,actor_id,proposal_id):
         self.members.require_active(actor_id)
@@ -66,6 +96,7 @@ class SharedPolicy:
         base=self.db.execute('SELECT body FROM shared_versions WHERE version=?',(row['base'],)).fetchone()
         result['diff']=''.join(difflib.unified_diff(base['body'].splitlines(True),row['body'].splitlines(True),fromfile='current',tofile='proposed'))
         result['votes']=[dict(v) for v in self.db.execute('SELECT owner,decision FROM shared_votes WHERE proposal=?',(proposal_id,))]
+        result['notifications']=[dict(v) for v in self.db.execute('SELECT owner,state FROM shared_notifications WHERE proposal=?',(proposal_id,))]
         result['membership_changes']=[dict(r) for r in self.db.execute("SELECT actor,subject,action,reason FROM member_audit WHERE action IN ('suspend','restore','activate') ORDER BY id DESC LIMIT 20")]
         return result
 

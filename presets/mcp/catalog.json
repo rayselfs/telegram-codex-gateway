@@ -1,0 +1,48 @@
+{
+  "notion": {
+    "status": "configurable",
+    "server": {"url": "https://mcp.notion.com/mcp"},
+    "transport": "streamable-http",
+    "authentication": "per-user OAuth via existing native login flow",
+    "version": "hosted service; discover tools at connection time",
+    "license": "hosted provider terms; no server package redistributed",
+    "scope_policy": "Review provider consent and discovered read/write tools; connection is not write authorization",
+    "source": "https://developers.notion.com/guides/mcp/get-started-with-mcp",
+    "checked": "2026-11-06",
+    "acceptance": "configuration only; new live login unverified"
+  },
+  "canva": {
+    "status": "host_setup_required",
+    "endpoint": "https://api.canva.com/connect/v1/mcp",
+    "transport": "streamable-http",
+    "authentication": "registered app OAuth client and per-user authorization",
+    "version": "hosted service",
+    "license": "hosted provider terms",
+    "scope_policy": "Provider client registration and user consent; generation may require a paid plan",
+    "source": "https://www.canva.dev/blog/developers/canva-mcp-ga/",
+    "checked": "2026-11-06",
+    "acceptance": "blocked until deployment client registration and native OAuth compatibility are verified; existing configurations are retained verbatim"
+  },
+  "google": {
+    "status": "host_setup_required",
+    "package": "workspace-mcp==2.3.0",
+    "transport": "stdio",
+    "authentication": "deployment OAuth client and separate owner credentials",
+    "license": "MIT; community implementation, not an official Google server",
+    "scope_policy": "Review selected Workspace tools and their OAuth scopes; no domain-wide delegation preset",
+    "source": "https://github.com/taylorwilsdon/google_workspace_mcp",
+    "checked": "2026-11-06",
+    "acceptance": "requires installed pinned runtime and owner adapter acceptance; no install or connection by default"
+  },
+  "microsoft": {
+    "status": "host_setup_required",
+    "package": "@softeria/ms-365-mcp-server@0.179.1",
+    "transport": "stdio",
+    "authentication": "owner-bound Microsoft account; existing full Microsoft 365 capability retained",
+    "license": "MIT; community implementation, not an official Microsoft server",
+    "scope_policy": "Review installed tool preset and Graph delegated permissions; no admin token inheritance",
+    "source": "https://www.npmjs.com/package/@softeria/ms-365-mcp-server",
+    "checked": "2026-11-06",
+    "acceptance": "package release discovered, not installed or validated; requires host runtime acceptance"
+  }
+}

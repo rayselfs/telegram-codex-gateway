@@ -7,8 +7,11 @@ from pathlib import Path
 from bootstrap import isolate, ROOT
 
 
-async def execute(profile, run, store, *, capture=False, members=None):
-    if members is not None: members.require_schedule(profile['owner_id'])
+async def execute(profile, run, store, *, capture=False, members=None, capture_prompt=None):
+    policy=None
+    if members is not None:
+        from gateway.mcp.presets import Presets
+        policy=Presets(members);policy.authorize_runtime(profile['owner_id'],scheduled=True)
     from controller import Controller
     from rpc import Client
     from lifecycle import ChildJob
@@ -33,7 +36,7 @@ async def execute(profile, run, store, *, capture=False, members=None):
 
     folder = profile['home'] / 'schedules' / 'runs' / run['id']
     folder.mkdir(parents=True,exist_ok=False)
-    rpc = Client(profile['home'], browser=False, authorize=(lambda: members.require_schedule(profile['owner_id'])) if members else None); job = ChildJob(rpc._proc)
+    rpc = Client(profile['home'], browser=False, authorize=(lambda: policy.authorize_runtime(profile['owner_id'],scheduled=True)) if policy else None); job = ChildJob(rpc._proc)
     journal = Journal(folder/'transport.sqlite'); output = Output()
     c = BackgroundController(rpc,output,journal,profile['workspace'],
         personal_instructions=profile['home']/'codex-home/AGENTS.md')
@@ -43,7 +46,7 @@ async def execute(profile, run, store, *, capture=False, members=None):
     if members is not None:
         from gateway.core.shared_policy import SharedPolicy
         c.shared_policy = SharedPolicy(members)
-        c.authorize = lambda: members.require_schedule(profile['owner_id'])
+        c.authorize = lambda: policy.authorize_runtime(profile['owner_id'],scheduled=True)
     import sqlite3
     with sqlite3.connect((profile['home']/'transport.sqlite').as_uri()+'?mode=ro', uri=True) as personal:
         memory = personal.execute("SELECT value FROM kv WHERE key='personal_memories'").fetchone()
@@ -52,7 +55,7 @@ async def execute(profile, run, store, *, capture=False, members=None):
     c.model,c.effort=run['model'],run['effort']
     events = None
     try:
-        await asyncio.to_thread(rpc.initialize, 'ezra_scheduled_task', 'Codex Gateway scheduled task', '1', {'experimentalApi':True})
+        await asyncio.to_thread(rpc.initialize, 'gateway_scheduled_task', 'Codex Gateway scheduled task', '1', {'experimentalApi':True})
         config=(await rpc.call('config/read',{}))['config']
         if config.get('features',{}).get('apps') is not False or config.get('mcp_oauth_credentials_store')!='file':
             raise RuntimeError('User account isolation unavailable')
@@ -64,9 +67,7 @@ async def execute(profile, run, store, *, capture=False, members=None):
                 '不要自行傳 Telegram 訊息，結果由 Gateway 交付。需要額外批准、登入或問題回答時停止並說明。'
                 '輸出存本人的工作區，回報相對路徑；不得更動另一使用者資料。\n'
                 '任務：'+spec['name']+'\n工作內容：'+spec['content'])
-        if capture:
-            from line_dynamic import PROMPT
-            prompt += '\n'+PROMPT
+        if capture_prompt:prompt += '\n'+capture_prompt
         await c.start([{'type':'text','text':prompt}])
         (folder/'native.json').write_text(json.dumps({'thread':c.thread,'turn':c.turn}),encoding='utf-8')
         events=asyncio.create_task(c.events())
@@ -98,14 +99,28 @@ async def execute(profile, run, store, *, capture=False, members=None):
         job.close();journal.close();shared_store.close()
 
 
-async def tick(profile, members=None):
+async def execute_capability(profile,run,store,capabilities):
+    spec=json.loads(run['spec'])
+    try:
+        store.authorize(spec,scheduled=True)
+        if capabilities is None:raise PermissionError('Capability unavailable')
+        result=await capabilities.dispatch(profile['owner_id'],spec['capability'],spec['action'],
+            spec['arguments'],'schedule:'+run['id'])
+        store.finish(run['id'],'completed','[SILENT]' if isinstance(result,dict) and result.get('silent') is True else json.dumps(result,ensure_ascii=False))
+    except PermissionError:
+        store.finish(run['id'],'blocked','Current authorization does not permit execution')
+    except Exception as error:
+        store.finish(run['id'],'unknown','Capability result unconfirmed: '+type(error).__name__+'. No automatic retry.')
+
+
+async def tick(profile, members=None, capabilities=None):
     if members is not None: members.require_schedule(profile['owner_id'])
     from schedules import Schedules
     from lifecycle import SingleInstance
     base=profile['home']/'schedules';base.mkdir(exist_ok=True)
     try:worker_lock=SingleInstance(base/'worker.lock')
     except RuntimeError:return 'worker_busy'
-    store=Schedules(base/'schedules.sqlite')
+    store=Schedules(base/'schedules.sqlite',members=members,owner=profile['owner_id'],capabilities=capabilities)
     try:
         store.recover();store.enqueue()
         # The same kernel-backed lock is held throughout foreground turns.
@@ -118,22 +133,17 @@ async def tick(profile, members=None):
             run=store.claim()
             if not run:return 'idle'
             spec=json.loads(run['spec'])
-            if spec['kind']=='reminder':
+            store.authorize(spec,scheduled=True)
+            if spec['kind']=='capability':
+                await execute_capability(profile,run,store,capabilities)
+            elif spec['kind']=='reminder':
                 store.finish(run['id'],'completed',spec['content'])
-            elif spec['kind']=='line_dynamic':
-                from line_dynamic import execute as dynamic_line
-                state,result=await dynamic_line(profile,run,store)
-                store.finish(run['id'],state,result)
-            elif spec['kind']=='line_message':
-                from line_schedule import execute as send_line
-                state,result=send_line(profile,run,store)
-                store.finish(run['id'],state,result)
-            elif spec['kind'] in {'m365_billing','media_failure','transcript_delivery'}:
-                store.finish(run['id'],'blocked','Site-specific integration is not installed.')
-            else:
+            elif spec['kind']=='codex':
                 try:await execute(profile,run,store,members=members)
                 except Exception as error:
                     store.finish(run['id'],'unknown','執行未確認：'+type(error).__name__+'。未自動重試。')
+            else:
+                store.finish(run['id'],'blocked','Task kind is not installed; no inference started.')
             return 'processed'
         finally:lease.close()
     finally:
@@ -153,8 +163,14 @@ def main():
     rows=members.active_profiles()
     profile=next((r for r in rows if r['owner_id']==a.owner),None)
     if profile is None:raise ValueError('Unknown owner')
-    try: result=asyncio.run(tick(profile,members))
-    finally: members.close()
+    from gateway.core.capabilities import Capabilities
+    capabilities=Capabilities(members)
+    services=None
+    try:
+        result=asyncio.run(tick(profile,members,capabilities))
+    finally:
+        if services:services.close()
+        members.close()
     (profile['home']/'schedules/worker-health.json').write_text(json.dumps({'time':time.time(),'state':result}),encoding='utf-8')
 
 

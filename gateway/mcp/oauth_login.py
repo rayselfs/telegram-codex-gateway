@@ -48,7 +48,8 @@ def validate_callback(url, state, redirect):
 
 
 class ServiceLogin:
-    def __init__(self, transport, home):
+    def __init__(self, transport, home, *, policy=None):
+        self.policy=policy
         self.tg, self.home = transport, home
         self.proc = self.job = self.task = None
         self.output = bytearray()
@@ -68,7 +69,8 @@ class ServiceLogin:
         config=self.home/'codex-home/config.toml'
         data=tomllib.loads(config.read_text(encoding='utf-8-sig')) if config.exists() else {}
         return {name:value for name,value in data.get('mcp_servers',{}).items()
-                if re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*',name) and value.get('enabled',True)}
+                if re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*',name) and value.get('enabled',True)
+                and (self.policy is None or self.policy.allowed(self.tg.owner,name,value))}
 
     async def server_statuses(self):
         rows=[];cursor=None;seen=set()
@@ -142,6 +144,7 @@ class ServiceLogin:
         return True
 
     async def start(self):
+        if self.policy is not None and self.service not in self.servers():raise PermissionError('Service authorization changed')
         from lifecycle import SingleInstance
         try:self.lease=SingleInstance(self.home/'execution.lock')
         except RuntimeError:

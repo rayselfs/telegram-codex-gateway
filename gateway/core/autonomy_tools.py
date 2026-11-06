@@ -1,7 +1,7 @@
 """Application-level owner-bound adapters; same-SID filesystem access can bypass them."""
 import base64
 
-SKILL_TOOL = {'type':'function','name':'ezra_shared_skill',
+SKILL_TOOL = {'type':'function','name':'gateway_shared_skill',
     'description':'List, publish, activate or withdraw your own shared skill; derive a new skill with source attribution. Publication only statically validates bytes and never runs scripts. Test in your workspace first.',
     'inputSchema':{'type':'object','properties':{
         'action':{'type':'string','enum':['list','publish','activate','withdraw']},

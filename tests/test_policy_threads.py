@@ -29,6 +29,11 @@ class PolicyThreadTests(unittest.IsolatedAsyncioTestCase):
         await self.c.start([{'type':'text','text':'test'}])
         injection=[p for m,p in self.rpc.calls if m=='thread/inject_items'][-1]
         self.assertEqual(injection['items'][0]['content'][0]['text'],'approved revision')
+        from bootstrap import ROOT
+        schema=ROOT/'evidence/schema-experimental/v2/ThreadInjectItemsParams.json'
+        if schema.is_file():
+            import json,jsonschema
+            jsonschema.validate(injection,json.loads(schema.read_text(encoding='utf-8')))
         self.assertEqual(self.journal.get('persona_version:'+self.c.thread),2)
 
     async def test_sync_failure_blocks_next_inference(self):

@@ -5,16 +5,17 @@ from pathlib import Path
 import shutil
 import stat
 
-MANAGED = Path('D:/CodexTelegram/managed/superpowers/7.0.1')
+from bootstrap import ROOT
+MANAGED = ROOT/'managed/superpowers/7.0.1'
 LEGACY_ROOTS = []
 
 
 def hashes(root):
     result = {}
-    if root.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+    if getattr(root.lstat(),'st_file_attributes',0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
         raise ValueError('Managed package cannot be redirected')
     for path in sorted(root.rglob('*')):
-        if path.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        if getattr(path.lstat(),'st_file_attributes',0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
             raise ValueError('Managed resources cannot be redirected')
         if path.is_file():
             result[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()

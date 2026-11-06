@@ -1,8 +1,6 @@
 from bootstrap import CODE_ROOT
 """Idle-only code deployment and rollback. Database snapshots are evidence, never restored."""
 import argparse
-import ctypes
-from ctypes import wintypes as w
 import hashlib
 import json
 from pathlib import Path
@@ -10,7 +8,7 @@ import shutil
 import sqlite3
 import subprocess
 import time
-from bootstrap import ROOT
+from bootstrap import ROOT, PYTHON, child_environment
 from profiles import load_profiles
 from lifecycle import SingleInstance
 from health_file import write_json
@@ -23,18 +21,21 @@ CHAT_UNRESOLVED = """SELECT 1 FROM jobs WHERE state IN ('running','dispatching',
 from gateway.core.releases import digest, checked_files, apply_package, rollback_package
 
 def terminate_gateway(pid):
-    k=ctypes.WinDLL('kernel32',use_last_error=True)
-    k.OpenProcess.argtypes=[w.DWORD,w.BOOL,w.DWORD];k.OpenProcess.restype=w.HANDLE
-    k.QueryFullProcessImageNameW.argtypes=[w.HANDLE,w.DWORD,w.LPWSTR,ctypes.POINTER(w.DWORD)]
-    k.TerminateProcess.argtypes=[w.HANDLE,w.UINT];k.WaitForSingleObject.argtypes=[w.HANDLE,w.DWORD];k.CloseHandle.argtypes=[w.HANDLE]
-    handle=k.OpenProcess(0x1000|1|0x100000,False,pid)
-    if not handle:raise RuntimeError('Gateway process unavailable')
-    try:
-        buf=ctypes.create_unicode_buffer(32768);size=w.DWORD(len(buf))
-        if not k.QueryFullProcessImageNameW(handle,0,buf,ctypes.byref(size)):raise RuntimeError('Cannot identify Gateway')
-        if Path(buf.value).resolve()!= (ROOT/'runtime/python/python.exe').resolve():raise RuntimeError('Wrong Gateway executable')
-        if not k.TerminateProcess(handle,0) or k.WaitForSingleObject(handle,10000)!=0:raise RuntimeError('Gateway did not exit')
-    finally:k.CloseHandle(handle)
+    # Request shutdown only through this deployment's authenticated local path.
+    (ROOT/'profile/stop.request').write_text('idle code release',encoding='utf-8')
+    for _ in range(200):
+        try:
+            lock=SingleInstance(ROOT/'profile/gateway.lock');lock.close();return
+        except RuntimeError:time.sleep(.1)
+    raise RuntimeError('Gateway has not stopped; preserve evidence and inspect')
+
+def start_gateway():
+    from gateway.platforms import current
+    home=ROOT/'profile'
+    (home/'stop.request').unlink(missing_ok=True)
+    with (home/'stdout.log').open('ab') as out,(home/'stderr.log').open('ab') as err:
+        subprocess.Popen([str(PYTHON),'-B',str(CODE_ROOT/'gateway_guard.py')],cwd=CODE_ROOT,
+            env=child_environment(),stdout=out,stderr=err,**current().process_options())
 
 def deploy(source,names,*,rollback=None):
     rows=checked_files(source,names) if rollback is None else []
@@ -51,7 +52,6 @@ def deploy(source,names,*,rollback=None):
                 with sqlite3.connect((p['home']/relative).as_uri()+'?mode=ro',uri=True) as db:
                     if db.execute(query).fetchone():raise RuntimeError('Owner has unresolved work')
                     with sqlite3.connect(evidence/(str(p['owner_id'])+'-'+Path(relative).name)) as backup:db.backup(backup)
-        leases.append(SingleInstance(home/'line-browser.lock'))
         health=json.loads((home/'health.json').read_text(encoding='utf-8'))
         if time.time()-health['time']>10 or any(u['busy'] or u['unknown'] or u['login_active'] for u in health['users']):
             raise RuntimeError('Gateway not idle or health stale')
@@ -75,8 +75,7 @@ def deploy(source,names,*,rollback=None):
         for lease in reversed(leases):lease.close()
         if owns_hold:hold.unlink(missing_ok=True)
         if stopped:
-            subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-File',str(target/'Start.ps1')],
-                check=True,creationflags=subprocess.CREATE_NO_WINDOW,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            start_gateway()
     if copied:
         for _ in range(50):
             try:

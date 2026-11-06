@@ -2,7 +2,7 @@
 import secrets
 import time
 
-TOOL = {'type': 'function', 'name': 'ezra_memory',
+TOOL = {'type': 'function', 'name': 'gateway_memory',
     'description': 'Manage the current user explicit personal memories. list reads; add/update/forget only when the user explicitly asks to remember, correct or forget. Never store passwords, tokens or OTPs. This does not erase native history or automatically generated Codex memories; explain that distinction.',
     'inputSchema': {'type': 'object', 'properties': {
         'action': {'type': 'string', 'enum': ['list', 'add', 'update', 'forget']},
@@ -66,5 +66,5 @@ class PersonalMemory:
         elif action == 'forget':
             result = self.apply({'action': 'forget', 'id': rest})
         else:
-            return await controller.start([{'type':'text','text': '管理我的個人記憶，優先使用 ezra_memory：' + arg}])
+            return await controller.start([{'type':'text','text': '管理我的個人記憶，優先使用 gateway_memory：' + arg}])
         await controller.tg.say(('已忘記這筆明確保存的記憶；歷史對話與 Codex 自動記憶未刪除。' if result['state']=='forgotten' else '個人記憶已更新：'+result['id']) + '\n新的對話會使用更新內容。')

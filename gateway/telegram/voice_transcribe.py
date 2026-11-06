@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import sys
+from bootstrap import ROOT
 
 
 def transcribe(path):
@@ -27,9 +28,9 @@ def transcribe(path):
     if not frames:
         raise ValueError('No audio')
     audio = np.concatenate(frames).astype(np.float32) / 32768.0
-    model = WhisperModel('D:/CodexTelegram/runtime/voice-model', device='cpu', compute_type='int8', cpu_threads=4, local_files_only=True)
+    model = WhisperModel(str(ROOT/'runtime/voice-model'), device='cpu', compute_type='int8', cpu_threads=4, local_files_only=True)
     segments, info = model.transcribe(audio, beam_size=5, vad_filter=True,
-        initial_prompt='請使用繁體中文。人名：User A、User B。助理：Codex Gateway。')
+        initial_prompt='請使用繁體中文。')
     text = ''.join(s.text for s in segments).strip()
     if not text or len(text)>12000:
         raise ValueError('No reliable speech')

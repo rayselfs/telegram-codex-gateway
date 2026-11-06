@@ -20,7 +20,7 @@ class Client(CodexAppServerClient):
         if not browser:
             config = home / 'codex-home/config.toml'
             servers = tomllib.loads(config.read_text(encoding='utf-8-sig')).get('mcp_servers', {}) if config.exists() else {}
-            for name in ('playwright', 'line_browser'):
+            for name in ('playwright',):
                 if name in servers:
                     extra_args.extend(['-c', f'mcp_servers.{name}.enabled=false'])
         super().__init__(codex_bin=str(CODEX), codex_home=str(home / 'codex-home'),

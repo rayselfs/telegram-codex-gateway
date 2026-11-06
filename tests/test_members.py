@@ -59,6 +59,14 @@ class MembersTests(unittest.TestCase):
         store.activate(101, 103, lambda _: True)
         self.assertEqual(len(store.active_profiles()), 3)
 
+    def test_restoring_never_activated_member_still_requires_health_activation(self):
+        store,_=self.registry();store.claim(store.invite(101),103,'member_c')
+        store.approve(101,103);store.provision(101,103)
+        store.suspend(101,103,'registration hold');store.restore(101,103,'resume registration')
+        with self.assertRaises(PermissionError):store.require_active(103)
+        self.assertEqual(store.require_onboarding(103)['state'],'pending')
+        with self.assertRaises(RuntimeError):store.activate(101,103,lambda _:False)
+
     def test_invite_replay_and_provision_retry(self):
         store, _ = self.registry()
         token = store.invite(101)

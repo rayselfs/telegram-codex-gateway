@@ -41,21 +41,25 @@ class Bootstrap:
             self.members.db.execute('UPDATE bootstrap SET claim_id=?,owner=?', (claim,telegram_user_id))
             return claim
 
-    def confirm_bootstrap(self, claim_id, expected_owner):
+    def confirm_bootstrap(self, claim_id, expected_owner, *, now=None):
         owner_id(expected_owner)
         with self.members.transaction():
             row = self.members.db.execute('SELECT * FROM bootstrap WHERE claim_id=?', (claim_id,)).fetchone()
-            if not row or row['consumed'] or row['owner'] != expected_owner:
+            if not row or row['consumed'] or row['owner'] != expected_owner or row['expires'] <= (time.time() if now is None else now):
                 raise PermissionError('Host must verify this exact claim and owner')
-            if row['confirmed']: return
-            if self.members.db.execute('SELECT 1 FROM members').fetchone():
-                raise PermissionError('Administrator already exists')
             home, workspace = [str(self.members.root/'users'/str(expected_owner)/p) for p in ('profile','workspace')]
             self.members._paths([dict(owner_id=expected_owner,home=home,workspace=workspace)])
-            self.members.db.execute('INSERT INTO members VALUES(?,?,?,?,?,?,?,?,?)',
-                (expected_owner,'Administrator','admin','pending',home,workspace,1,0,1))
-            self.members.db.execute('UPDATE bootstrap SET confirmed=1')
-            self.members._audit(expected_owner,expected_owner,'host_confirm_bootstrap')
+            if row['confirmed']:
+                member=self.members.require_onboarding(expected_owner)
+                if member['role'] != 'admin' or member['home'] != home or member['workspace'] != workspace:
+                    raise PermissionError('Bootstrap binding changed')
+            else:
+                if self.members.db.execute('SELECT 1 FROM members').fetchone():
+                    raise PermissionError('Administrator already exists')
+                self.members.db.execute('INSERT INTO members VALUES(?,?,?,?,?,?,?,?,?)',
+                    (expected_owner,'Administrator','admin','pending',home,workspace,1,0,1))
+                self.members.db.execute('UPDATE bootstrap SET confirmed=1')
+                self.members._audit(expected_owner,expected_owner,'host_confirm_bootstrap')
         # Only empty per-owner resources are created; no existing profile is inherited.
         for p in (Path(home)/'codex-home',Path(workspace)):
             p.mkdir(parents=True,exist_ok=True)

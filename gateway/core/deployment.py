@@ -23,6 +23,8 @@ def validate_root(root, code):
     return root
 
 def create(root, code, python, codex, timezone):
+    from zoneinfo import ZoneInfo
+    ZoneInfo(timezone)
     root = validate_root(root, code)
     if root.exists() and any(root.iterdir()):
         raise ValueError('Nonempty data directory requires explicit resume or migration')

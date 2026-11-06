@@ -1,4 +1,5 @@
 import importlib.util
+import asyncio
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -26,7 +27,7 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
             await service.handle(update(103,'/start invite_'+token))
             await service.handle(update(103,'/login codex')); login.assert_not_awaited()
             await service.handle(update(101,'/members approve 103'))
-            await service.handle(update(103,'/login codex')); login.assert_awaited_once()
+            await service.handle(update(103,'/login codex')); await asyncio.sleep(0); login.assert_awaited_once()
             await service.handle(update(101,'/members activate 103'))
             await service.handle(update(101,'/members activate 103'))
             activate.assert_awaited_once()
@@ -36,5 +37,25 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
             await service.handle(update(101,'/members suspend 103 test'))
             self.assertTrue(await service.handle(update(103,'normal message')))
             self.assertEqual(members.require_active(102)['state'],'active')
+
+    async def test_pending_login_does_not_block_active_members(self):
+        from gateway.telegram.registration import Registration
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with closing(Members(root/'members.sqlite',root)) as members:
+                members.import_existing([dict(owner_id=n,name=str(n),home=str(root/f'{n}/profile'),workspace=str(root/f'{n}/workspace')) for n in (101,102)],101)
+                members.claim(members.invite(101),103,'member_c');members.approve(101,103);members.provision(101,103)
+                started=asyncio.Event();finish=asyncio.Event()
+                async def login(row):started.set();await finish.wait()
+                service=Registration(members,AsyncMock(),login,AsyncMock(),AsyncMock(),'example_bot')
+                def update(owner,text):return NS(effective_user=NS(id=owner,is_bot=False),effective_chat=NS(id=owner,type='private'),message=NS(text=text))
+                try:
+                    await asyncio.wait_for(service.handle(update(103,'/login codex')),timeout=.2)
+                    await asyncio.wait_for(started.wait(),timeout=.2)
+                    self.assertFalse(await service.handle(update(102,'existing conversation')))
+                    await service.handle(update(103,'/login codex'))
+                    self.assertEqual(len(service.login_tasks),1)
+                finally:
+                    finish.set();await service.close()
 
 if __name__=='__main__': unittest.main()

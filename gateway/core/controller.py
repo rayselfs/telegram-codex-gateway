@@ -65,6 +65,7 @@ class Controller:
 
     authorize = None
 
+    capability_tools = None
     shared_policy = None
     persona_revision = None
 
@@ -172,6 +173,9 @@ class Controller:
         if self.shared_policy is not None:
             self.persona_revision = self.shared_policy.active_persona()
             params['developerInstructions'] = self.persona_revision['body']
+        if self.capability_tools is not None:
+            from gateway.core.capabilities import TOOL as CAPABILITY_TOOL
+            params['dynamicTools'].append(CAPABILITY_TOOL)
         data = await self.rpc.call('thread/start', params)
         self.check_permissions(data)
         self.thread = data['thread']['id']
@@ -360,7 +364,7 @@ class Controller:
                 return await self.tg.say('\n\n'.join(local_time(r['due'])+' · '+labels.get(r['state'],'待核對')+'\n'+(r['result'] or '尚無結果')[:1500]+ ('\n通知是否送達不明，未自動重送。' if r['notification']=='unknown' else '') for r in rows[:5]) or '尚無執行紀錄。')
             if self.thread and not self.journal.get('schedule:' + self.thread):
                 return await self.tg.say('這是更新前的對話，請先 /new，再提出排程需求。原對話仍保留。')
-            return await self.start([{'type':'text','text':'請使用 ezra_schedule 管理本人的排程：'+arg}])
+            return await self.start([{'type':'text','text':'請使用 gateway_schedule 管理本人的排程：'+arg}])
         if cmd in ('/start', '/help'):
             return await self.tg.say('使用者：' + getattr(self.tg, 'display_name', 'User A') + '\n' + HELP)
         if cmd == '/status':
@@ -665,7 +669,18 @@ class Controller:
     async def server_request(self, request):
         self.require_member()
         p, method = request.get('params', {}), request['method']
-        if method == 'item/tool/call' and p.get('tool') == 'ezra_self_help':
+        if method == 'item/tool/call' and p.get('tool') == 'gateway_capability':
+            if not self.capability_tools or p.get('threadId') != self.thread or p.get('turnId') != self.turn or not self.busy:
+                self.rpc.respond_error(request['id'],-32601,'Unavailable or stale capability call'); return
+            try:
+                result=await self.capability_tools.apply(p['arguments'],'native:'+str(self.thread)+':'+str(self.turn)+':'+str(request['id']))
+                success=True
+            except Exception as error:
+                result={'state':'blocked','reason':type(error).__name__};success=False
+            self.rpc.respond(request['id'],{'success':success,'contentItems':[{'type':'inputText','text':json.dumps(result,ensure_ascii=False)}]})
+            return
+
+        if method == 'item/tool/call' and p.get('tool') == 'gateway_self_help':
             if (not self.self_help or p.get('threadId') != self.thread or
                     p.get('turnId') != self.turn or not self.busy):
                 self.rpc.respond_error(request['id'],-32601,'Unavailable or stale self-help call')
@@ -677,7 +692,7 @@ class Controller:
             self.rpc.respond(request['id'],{'success':success,'contentItems':[
                 {'type':'inputText','text':json.dumps(result,ensure_ascii=False)}]})
             return
-        if method == 'item/tool/call' and p.get('tool') == 'ezra_shared_skill':
+        if method == 'item/tool/call' and p.get('tool') == 'gateway_shared_skill':
             if (not self.shared_skills or p.get('threadId') != self.thread or
                     p.get('turnId') != self.turn or not self.busy):
                 self.rpc.respond_error(request['id'], -32601, 'Unavailable or stale skill call')
@@ -690,7 +705,7 @@ class Controller:
             self.rpc.respond(request['id'], {'success':success,'contentItems':[
                 {'type':'inputText','text':json.dumps(result,ensure_ascii=False)}]})
             return
-        if method == 'item/tool/call' and p.get('tool') == 'ezra_memory':
+        if method == 'item/tool/call' and p.get('tool') == 'gateway_memory':
             if p.get('threadId') != self.thread or p.get('turnId') != self.turn or not self.busy:
                 self.rpc.respond_error(request['id'], -32601, 'Stale memory call')
                 return
@@ -700,7 +715,7 @@ class Controller:
                 result, success = str(error), False
             self.rpc.respond(request['id'], {'success':success, 'contentItems':[{'type':'inputText','text':json.dumps(result,ensure_ascii=False)}]})
             return
-        if method == 'item/tool/call' and p.get('tool') == 'ezra_schedule' and self.schedule_ui:
+        if method == 'item/tool/call' and p.get('tool') == 'gateway_schedule' and self.schedule_ui:
             if p.get('threadId') != self.thread or p.get('turnId') != self.turn:
                 self.rpc.respond_error(request['id'], -32601, 'Stale schedule call')
                 return

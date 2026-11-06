@@ -122,7 +122,7 @@ class CodexAppServerClient:
 
     def initialize(
         self,
-        client_name: str = "ezra",
+        client_name: str = "telegram_gateway",
         client_title: str = "Codex Gateway",
         client_version: str = "0.1",
         capabilities: Optional[dict] = None,

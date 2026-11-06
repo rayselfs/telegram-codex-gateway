@@ -1,13 +1,32 @@
 """Fixed-text registration commands. No model is involved in authorization."""
 from pathlib import Path
+import asyncio
 from gateway.core.init import Bootstrap
 
 class Registration:
     def __init__(self,members,send,login,check,activate,bot_name,*,shared_policy=None):
+        self.extensions={}
+        self.login_tasks={}
         self.shared_policy=shared_policy
         self.attached={r['owner_id'] for r in members.active_profiles()}
         self.members,self.send,self.login,self.check,self.activate=members,send,login,check,activate
         self.bot_name=bot_name
+
+    async def close(self):
+        tasks=list(self.login_tasks.values())
+        for task in tasks:task.cancel()
+        if tasks:await asyncio.gather(*tasks,return_exceptions=True)
+
+    def begin_login(self,row):
+        owner=row['owner_id']
+        if owner in self.login_tasks and not self.login_tasks[owner].done():return
+        async def run():
+            try:await self.login(row)
+            except asyncio.CancelledError:raise
+            except Exception:
+                await self.send(owner,'登入未完成；原資料保留，可重試 /login codex。')
+            finally:self.login_tasks.pop(owner,None)
+        self.login_tasks[owner]=asyncio.create_task(run())
 
     async def handle(self,update):
         user,chat=update.effective_user,update.effective_chat
@@ -62,12 +81,19 @@ class Registration:
             except PermissionError:
                 if command=='/login' and parts[1:]==['codex']:
                     row=self.members.require_onboarding(actor)
-                    await self.login(row)
+                    self.begin_login(row)
                 elif command=='/registration':
                     row=self.members._member(actor)
                     await self.send(actor,'註冊狀態：'+row['state'])
                 else:
                     await self.send(actor,'帳號尚未啟用，請使用有效邀請並等待管理員核准。')
+                return True
+            if command in self.extensions:
+                message_id=getattr(message,'message_id',None)
+                if type(message_id) is not int: raise ValueError('Telegram message identity required')
+                result=await self.extensions[command](actor,text.partition(' ')[2],'telegram:'+str(actor)+':'+str(message_id))
+                import json
+                await self.send(actor,json.dumps(result,ensure_ascii=False))
                 return True
             if command=='/persona' and self.shared_policy is not None:
                 policy=self.shared_policy
@@ -78,11 +104,18 @@ class Registration:
                         await self.send(actor,'待核准 '+proposal['id']+' / '+proposal['hash'])
                 elif parts[1]=='propose' and len(parts)>=4:
                     proposal=policy.propose(actor,int(parts[2]),text.split(None,3)[3])
-                    for member in self.members.active_profiles():
-                        await self.send(member['owner_id'],'共用指引提案 '+proposal['id']+'\n雜湊 '+proposal['hash']+'\n'+proposal['body'])
+                    await policy.notify(actor,proposal['id'],self.send)
+                elif parts[1]=='policy' and len(parts)==4:
+                    current=policy.active_persona()
+                    proposal=policy.propose(actor,int(parts[2]),current['body'],policy=parts[3])
+                    await policy.notify(actor,proposal['id'],self.send)
+                elif parts[1]=='rollback' and len(parts)==4:
+                    proposal=policy.propose_rollback(actor,int(parts[2]),int(parts[3]))
+                    await policy.notify(actor,proposal['id'],self.send)
                 elif parts[1]=='view' and len(parts)==3:
                     proposal=policy.view(actor,parts[2])
-                    await self.send(actor,proposal['hash']+'\n'+proposal['body']+'\n'+proposal['diff'])
+                    import json
+                    await self.send(actor,json.dumps(proposal,ensure_ascii=False))
                 elif parts[1]=='vote' and len(parts)==5 and parts[4] in ('approve','reject'):
                     current=policy.vote(actor,parts[2],parts[3],parts[4]=='approve')
                     await self.send(actor,'已記錄本人投票；現行版本 '+str(current['version']))

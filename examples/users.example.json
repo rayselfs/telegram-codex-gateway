@@ -1,14 +1,4 @@
 [
-  {
-    "name": "Owner A",
-    "owner_id": 1000000001,
-    "home": "D:/CodexTelegram/profile",
-    "workspace": "D:/CodexTelegram/workspace"
-  },
-  {
-    "name": "Owner B",
-    "owner_id": 1000000002,
-    "home": "D:/CodexTelegram/users/1000000002/profile",
-    "workspace": "D:/CodexTelegram/users/1000000002/workspace"
-  }
+  {"owner_id":101,"name":"admin_a","home":"C:/GatewayData/users/101/profile","workspace":"C:/GatewayData/users/101/workspace"},
+  {"owner_id":102,"name":"member_b","home":"C:/GatewayData/users/102/profile","workspace":"C:/GatewayData/users/102/workspace"}
 ]

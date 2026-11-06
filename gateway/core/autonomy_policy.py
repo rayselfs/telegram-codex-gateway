@@ -6,7 +6,8 @@ Native commands use the current non-elevated Windows user's rights; no UAC broke
 from pathlib import Path
 
 PERMISSION_MODE='workspace-write'
-SHARED_STORE=Path('D:/CodexShared/published-v1')
+from bootstrap import ROOT
+SHARED_STORE=ROOT/'shared/skills'
 
 
 def configure(controller,owner_id,*,root=SHARED_STORE):

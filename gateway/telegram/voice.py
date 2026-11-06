@@ -4,6 +4,7 @@ process_options = current().process_options
 import asyncio
 import json
 import subprocess
+import sys
 from pathlib import Path
 from bootstrap import ROOT, child_environment
 
@@ -12,7 +13,8 @@ async def transcribe(path):
     env = child_environment()
     env.update(PYTHONUTF8='1', HF_HUB_OFFLINE='1', HF_HOME=str(ROOT/'runtime/voice-cache'),
                TEMP=str(path.parent), TMP=str(path.parent))
-    proc = await asyncio.create_subprocess_exec(str(ROOT/'runtime/voice-venv/Scripts/python.exe'),
+    executable=ROOT/('runtime/voice-venv/Scripts/python.exe' if sys.platform=='win32' else 'runtime/voice-venv/bin/python')
+    proc = await asyncio.create_subprocess_exec(str(executable),
         '-B', str(CODE_ROOT/'voice_transcribe.py'), str(path), env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         **process_options())

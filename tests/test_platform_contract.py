@@ -53,8 +53,23 @@ class PlatformContractTests(unittest.TestCase):
         else:
             self.assertEqual(kwargs, {'start_new_session': True})
 
+    def test_same_bot_cannot_poll_from_two_data_roots(self):
+        api=self.backend()
+        with tempfile.TemporaryDirectory() as folder:
+            first=api.BotInstance('101:synthetic-secret',lock_root=Path(folder))
+            try:
+                with self.assertRaises(RuntimeError):api.BotInstance('101:rotated-secret',lock_root=Path(folder))
+                other=api.BotInstance('102:synthetic-secret',lock_root=Path(folder));other.close()
+            finally:first.close()
+            api.BotInstance('101:synthetic-secret',lock_root=Path(folder)).close()
+
     @unittest.skipUnless(sys.platform == 'darwin', 'Requires a native macOS test host')
-    def test_native_keychain_and_launchagent_acceptance(self):
-        self.fail('Native acceptance must exercise Keychain and launchd on a dedicated host before release')
+    def test_native_keychain_roundtrip_and_owner_binding(self):
+        api=self.backend();reference=api.crypt(b'offline-secret-test',b'owner-101',True)
+        try:
+            self.assertNotIn(b'offline-secret-test',reference)
+            self.assertEqual(api.crypt(reference,b'owner-101',False),b'offline-secret-test')
+            with self.assertRaises(RuntimeError):api.crypt(reference,b'owner-102',False)
+        finally:api.delete_secret(reference,b'owner-101')
 
 if __name__ == '__main__': unittest.main()

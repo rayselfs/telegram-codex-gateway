@@ -49,4 +49,7 @@ def isolate(test=False):
 
 def child_environment():
     allowed={'TELEGRAM_CODEX_ROOT','TELEGRAM_CODEX_CONFIG','TELEGRAM_CODEX_ROOT','TELEGRAM_CODEX_BINARY','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','PATH','USERPROFILE','HOME','HOMEDRIVE','HOMEPATH','APPDATA','LOCALAPPDATA','PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMDATA','USERNAME','OS','PROCESSOR_ARCHITECTURE','NUMBER_OF_PROCESSORS','TEMP','TMP','PYTHONUTF8'}
-    return {k:v for k,v in os.environ.items() if k.upper() in allowed}
+    env={k:v for k,v in os.environ.items() if k.upper() in allowed}
+    env['TELEGRAM_CODEX_ROOT']=str(ROOT)
+    if CONFIG_PATH:env['TELEGRAM_CODEX_CONFIG']=str(Path(CONFIG_PATH).absolute())
+    return env

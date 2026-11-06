@@ -23,6 +23,26 @@ class SingleInstance:
         self.file.close()
 
 
+class BotInstance:
+    def __init__(self,token,*,lock_root=None):
+        import hashlib
+        bot=token.partition(':')[0]
+        if not bot.isascii() or not bot.isdigit() or ':' not in token:raise ValueError('Invalid bot identity')
+        name='Global\\telegram-codex-bot-'+hashlib.sha256(bot.encode()).hexdigest()
+        self.kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+        self.kernel.CreateMutexW.argtypes=[ctypes.c_void_p,w.BOOL,w.LPCWSTR]
+        self.kernel.CreateMutexW.restype=w.HANDLE
+        self.kernel.CloseHandle.argtypes=[w.HANDLE]
+        self.handle=self.kernel.CreateMutexW(None,False,name)
+        error=ctypes.get_last_error()
+        if not self.handle or error==183:
+            self.close()
+            raise RuntimeError('Bot is already running or its host lock is unavailable')
+
+    def close(self):
+        if self.handle:self.kernel.CloseHandle(self.handle);self.handle=None
+
+
 def decrypt_token(path):
     class Blob(ctypes.Structure):
         _fields_ = [('size', w.DWORD), ('data', ctypes.POINTER(ctypes.c_byte))]
@@ -106,3 +126,34 @@ def opened_path(source):
     if actual.startswith("\\\\?\\"):
         actual = actual[4:]
     return Path(actual)
+
+
+def install_background(jobs):
+    import json,subprocess
+    payload=[dict(job,argument_line=subprocess.list2cmdline(job['arguments'])) for job in jobs]
+    script=r'''
+$ErrorActionPreference='Stop'
+$definitions=[Console]::In.ReadToEnd() | ConvertFrom-Json
+$identity=[Security.Principal.WindowsIdentity]::GetCurrent().Name
+$principal=New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
+foreach($job in $definitions){
+ $existing=Get-ScheduledTask -TaskName $job.name -ErrorAction SilentlyContinue
+ if($existing){
+  if($existing.Actions.Count -ne 1 -or $existing.Actions[0].Execute -ne $job.python -or $existing.Actions[0].Arguments -ne $job.argument_line -or $existing.Actions[0].WorkingDirectory -ne $job.cwd){throw 'Existing task binding differs; inspect before takeover'}
+  continue
+ }
+ $action=New-ScheduledTaskAction -Execute $job.python -Argument $job.argument_line -WorkingDirectory $job.cwd
+ if($job.interval){
+  $trigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Seconds $job.interval)
+  $limit=New-TimeSpan -Minutes 10
+ }else{
+  $trigger=New-ScheduledTaskTrigger -AtLogOn -User $identity
+  $limit=[TimeSpan]::Zero
+ }
+ $settings=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -ExecutionTimeLimit $limit -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+ Register-ScheduledTask -TaskName $job.name -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Owner-bound Telegram Gateway background work' | Out-Null
+}
+'''
+    subprocess.run([os.path.join(os.environ['SYSTEMROOT'],'System32/WindowsPowerShell/v1.0/powershell.exe'),
+        '-NoProfile','-NonInteractive','-Command',script],input=json.dumps(payload),text=True,
+        capture_output=True,check=True,timeout=60,**process_options())

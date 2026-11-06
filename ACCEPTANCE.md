@@ -1,19 +1,11 @@
-# Acceptance record — 2026-11-05
+# Acceptance status
 
-This release publishes a sanitized source snapshot with independent Git history. It does not include operational profiles or a fully configured deployment.
+This candidate is not approved for deployment. No live Telegram polling, provider login, billable model turn or external write is part of offline acceptance.
 
-| Area | Evidence and limits |
-|---|---|
-| Gateway guard | Real local child-exit test, bounded persisted retries, intentional-stop test. Actual long-running outage recovery and reboot not tested. |
-| Telegram delivery | Partial success followed by timeout preserves the first receipt and marks the next chunk unknown. Mock transport; no real messages sent. |
-| LINE confirmation | Offline Chromium fixture rejects incoming same-text and local pending IDs; real OS lease rejects concurrent access. No real send in this change. |
-| MCP audit/trust | Per-owner grant/revoke/configuration-change tests. Actual external-service prompts not exercised. |
-| Schedule wait/grace | Default and bounded configurable deadlines tested. No real schedules created. |
-| Worker recovery | Healthy-hour reset and initialization input gate tested. No user work replayed. |
-| Dynamic preview | Saved/generated strict output and sender-not-called test. Source completeness and real Notion-to-LINE execution remain unverified. |
-| Release/rollback | Idle production release and code-hash verification performed in the originating private deployment. Start-process pipe inheritance bug corrected. Full rollback/fault matrix not exercised. |
-| Public distribution | Windows Python suite: 112 tests, one protocol-schema check skipped. Native child check used the pinned installed binary. Private superset: 209 tests passed. Existing pipe ResourceWarnings remain. |
+Automated tests cover member role/state gates, local-confirmed bootstrap, concurrent votes, proposal notification ambiguity, owner-bound capability schedules, code package rollback, migration hash preservation, active-only legacy routing, provider configuration policy and host paths.
 
-The originating service was online after the first release, but one owner had an unresolved dispatch status. Its cause was not proven. The subsequent initialization gate is included in this source release and tested, but was not activated in that service because the idle/unknown deployment gate blocked another restart. This document does not claim full production acceptance.
+Windows native isolated tests cover accepted Codex initialization and generated protocol schemas, DPAPI, file handles, same-bot mutexes, owner execution locks and child cleanup. This does not establish provider account readiness, actual speech-model quality, OS logon job startup or sleep/wake behavior.
 
-Before claiming deployment readiness, verify both owners on Telegram, same-service trust and revocation, browser contention, a reviewed dynamic preview, explicitly authorized external delivery, recovery without duplicate writes, staged rollback, and reboot followed by normal-user login. Never run live-message acceptance against real recipients without authorization.
+macOS requires native Keychain, locks, process groups, safe delivery, LaunchAgent, logon/wake and full new-install acceptance on the declared OS/CPU matrix. A skipped test is a blocker, not evidence of support.
+
+Release gates also require a clean current public manifest and review of inherited Git history, explicit private migration evidence, and review of any remaining feature limitations. Do not push this development history or deploy a code package merely because unit tests pass.

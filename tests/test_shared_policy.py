@@ -28,6 +28,49 @@ class SharedPolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError): policy.vote(102,p['id'],p['hash'],True)
         self.assertEqual(policy.active_persona()['version'],2)
 
+    def test_unknown_notification_is_retained_and_never_resent(self):
+        import asyncio
+        policy,members=self.policy();proposal=policy.propose(101,1,'new')
+        sent=[]
+        async def send(owner,text):
+            sent.append((owner,text))
+            if owner==102:raise TimeoutError('unknown result')
+            return [owner*10]
+        asyncio.run(policy.notify(101,proposal['id'],send))
+        asyncio.run(policy.notify(101,proposal['id'],send))
+        self.assertEqual(len(sent),3)
+        self.assertTrue(all(proposal['hash'] in text for _,text in sent))
+        self.assertEqual({r['owner']:r['state'] for r in policy.view(101,proposal['id'])['notifications']},
+                         {101:'delivered',102:'unknown',103:'delivered'})
+
+    def test_simultaneous_final_votes_publish_exactly_one_revision(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        from gateway.core.members import Members
+        from gateway.core.shared_policy import SharedPolicy
+        policy,members=self.policy();proposal=policy.propose(101,1,'new')
+        policy.vote(101,proposal['id'],proposal['hash'],True)
+        barrier=Barrier(2)
+        def vote(owner):
+            m=Members(self.root/'members.sqlite',self.root)
+            try:
+                p=SharedPolicy(m);barrier.wait(timeout=5)
+                return p.vote(owner,proposal['id'],proposal['hash'],True)
+            finally:m.close()
+        with ThreadPoolExecutor(max_workers=2) as executor:list(executor.map(vote,(102,103)))
+        self.assertEqual(policy.active_persona()['version'],2)
+        self.assertEqual(policy.db.execute('SELECT count(*) FROM shared_versions').fetchone()[0],2)
+
+    def test_rollback_is_a_new_proposal_under_current_policy(self):
+        policy,members=self.policy();proposal=policy.propose(101,1,'new')
+        for owner in (101,102,103):policy.vote(owner,proposal['id'],proposal['hash'],True)
+        back=policy.propose_rollback(102,2,1)
+        for owner in (101,102):policy.vote(owner,back['id'],back['hash'],True)
+        self.assertEqual(policy.active_persona()['body'],'new')
+        policy.vote(103,back['id'],back['hash'],True)
+        self.assertEqual(policy.active_persona()['body'],'original')
+        self.assertEqual(policy.active_persona()['version'],3)
+
     def test_membership_or_base_change_requires_new_approval(self):
         policy,members=self.policy();p=policy.propose(101,1,'new')
         policy.vote(101,p['id'],p['hash'],True)

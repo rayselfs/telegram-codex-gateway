@@ -44,10 +44,10 @@ class OAuthFlowTests(unittest.IsolatedAsyncioTestCase):
         return ServiceLogin(tg,home)
 
     async def test_callback_consumed_deleted_and_not_logged(self):
-        flow=self.login();flow.proc=NS(stdin=io.BytesIO());flow.state='ray-state'
+        flow=self.login();flow.proc=NS(stdin=io.BytesIO());flow.state='member-a-state'
         flow.redirect='http://127.0.0.1:3406/callback';flow.started=time.monotonic()
         msg=NS(delete=AsyncMock())
-        url=flow.redirect+'?code=one-time-secret&state=ray-state'
+        url=flow.redirect+'?code=one-time-secret&state=member-a-state'
         self.assertTrue(await flow.handle(msg,url))
         msg.delete.assert_awaited_once()
         self.assertTrue(flow.submitted)
@@ -58,13 +58,13 @@ class OAuthFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_other_owner_stale_and_expired_callbacks_not_forwarded(self):
         flow=self.login();msg=NS(delete=AsyncMock())
-        url='http://127.0.0.1:3406/callback?code=secret&state=ray-state'
+        url='http://127.0.0.1:3406/callback?code=secret&state=member-a-state'
         self.assertTrue(await flow.handle(msg,url))
-        flow.proc=NS(stdin=io.BytesIO());flow.state='tina-state'
+        flow.proc=NS(stdin=io.BytesIO());flow.state='member-b-state'
         flow.redirect='http://127.0.0.1:3406/callback';flow.started=time.monotonic()
         self.assertTrue(await flow.handle(msg,url))
         self.assertEqual(flow.proc.stdin.getvalue(),b'')
-        flow.state='ray-state';flow.started-=601
+        flow.state='member-a-state';flow.started-=601
         self.assertTrue(await flow.handle(msg,url))
         self.assertEqual(flow.proc.stdin.getvalue(),b'')
         self.assertNotIn('secret',str(flow.tg.say.call_args_list))
