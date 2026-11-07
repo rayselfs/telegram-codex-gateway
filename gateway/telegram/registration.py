@@ -93,7 +93,7 @@ class Registration:
                 if type(message_id) is not int: raise ValueError('Telegram message identity required')
                 result=await self.extensions[command](actor,text.partition(' ')[2],'telegram:'+str(actor)+':'+str(message_id))
                 import json
-                await self.send(actor,json.dumps(result,ensure_ascii=False))
+                await self.send(actor,result if isinstance(result,str) else json.dumps(result,ensure_ascii=False))
                 return True
             if command=='/persona' and self.shared_policy is not None:
                 policy=self.shared_policy
