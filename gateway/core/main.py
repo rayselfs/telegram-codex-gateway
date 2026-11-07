@@ -11,6 +11,7 @@ import sys
 import time
 import os
 from health_file import write_json
+from gateway.core.service_faults import supervise, check_recovery, record_error
 from bootstrap import isolate, ROOT, CODEX
 
 
@@ -79,6 +80,7 @@ async def serve(home):
         controller.shared_policy = shared_policy
         if capabilities.handlers: controller.capability_tools = CapabilityTools(capabilities,profile['owner_id'])
         controller.authorize = lambda owner=profile['owner_id']: mcp_policy.authorize_runtime(owner)
+        controller.background_faults = item.setdefault('service_faults',{})
         controller.execution_lock_path = profile['home'] / 'execution.lock'
         item['availability'] = Availability(tg, journal)
         schedules = item['schedules'] = Schedules(profile['home'] / 'schedules/schedules.sqlite',members=registry,owner=profile['owner_id'],capabilities=capabilities)
@@ -106,9 +108,9 @@ async def serve(home):
         from self_help import SelfHelp
         controller.self_help=SelfHelp(controller,item['supervisor'])
         item['recovery_task']=asyncio.create_task(item['supervisor'].start())
-        tasks.extend([asyncio.create_task(controller.sender()),
-                      asyncio.create_task(deliver_schedules(item['schedules'], tg)),
-                      asyncio.create_task(tg.typing_loop())])
+        tasks.extend([asyncio.create_task(supervise(item,'sender',controller.sender)),
+                      asyncio.create_task(supervise(item,'schedule_delivery',lambda:deliver_schedules(item['schedules'], tg))),
+                      asyncio.create_task(supervise(item,'typing',tg.typing_loop))])
 
     attach_failed=set()
     async def attach(row):
@@ -157,7 +159,8 @@ async def serve(home):
                 if profile['owner_id'] not in connection.peers and profile['owner_id'] not in attach_failed:
                     try:await attach(registry.require_active(profile['owner_id']))
                     except Exception:attach_failed.add(profile['owner_id'])
-            users = [{'name': r['profile']['name'], 'codex': 'offline' if r['rpc'].failure else 'ready',
+            users = [{'name': r['profile']['name'], 'codex': 'degraded' if r.get('service_faults') else ('offline' if r['rpc'].failure else 'ready'),
+                      'service_faults':list(r.get('service_faults',{})),
                       'busy': r['controller'].busy, 'unknown': r['controller'].unknown,
                       'seen': r['tg'].seen_update, 'login_active': r['tg'].login.active} for r in resources]
             status = {'time': time.time(), 'pid': os.getpid(), 'started_at': started_at,
@@ -169,8 +172,8 @@ async def serve(home):
                       'login_active': any(u['login_active'] for u in users),
                       'unknown': any(u['unknown'] for u in users), 'users': users}
             write_json(home/'health.json',status)
-            await asyncio.gather(*(r['availability'].update(
-                not r['rpc'].failure, 'Codex worker 連線異常。') for r in resources))
+            await asyncio.gather(*(supervise(r,'availability',lambda r=r:r['availability'].update(
+                not r['rpc'].failure, 'Codex worker 連線異常。'),terminal=False) for r in resources))
             for item in resources:
                 try:
                     registry.require_active(item['profile']['owner_id'])
@@ -182,19 +185,17 @@ async def serve(home):
                         await quiesce(item)
                         item['suspended']=True
                     continue
+                if item.get('service_faults'):continue
                 if item.pop('suspended',False):
                     item['recovery_task']=asyncio.create_task(restore(item))
                 recovery_task=item.get('recovery_task')
                 if recovery_task is None or recovery_task.done():
-                    if recovery_task:
-                        await recovery_task
+                    if not await check_recovery(item):continue
                     worker_failed=bool(item['rpc'].failure) or bool(item['event_task'] and item['event_task'].done())
                     if (item['controller'].busy or item['controller'].pending) and not worker_failed:
                         continue
                     item['recovery_task']=asyncio.create_task(item['supervisor'].tick(
                         failed=worker_failed))
-            if any(t.done() for t in tasks):
-                raise RuntimeError('Gateway worker stopped; no fallback started')
             await asyncio.sleep(1)
     finally:
         await asyncio.gather(*(r['availability'].update(False, '服務正在停止。', force=True)
@@ -309,5 +310,6 @@ if __name__ == '__main__':
         sys.exit(main())
     except Exception as error:
         # Deliberately exclude exception contents and tracebacks from unattended logs.
+        record_error(ROOT/'profile','gateway',error)
         print('Gateway stopped: ' + type(error).__name__ + '. Run Check.ps1 and consult acceptance report.')
         sys.exit(1)

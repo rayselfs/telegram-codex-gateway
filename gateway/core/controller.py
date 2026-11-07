@@ -207,6 +207,8 @@ class Controller:
 
     async def start(self, inputs, recovery_model=None):
         self.require_member()
+        if getattr(self,'background_faults',None):
+            return await self.tg.say('本人的背景服務異常，新的工作尚未啟動；請由維護端核對。其他人的工作不受影響。')
         if self.initializing:return await self.tg.say('本人 worker 正在恢復，這則工作尚未提交；請稍後重送。')
         if self.busy or self.pending:
             await self.tg.say('工作進行中，未排入新工作；請用 /steer 或稍後重送。')
@@ -371,6 +373,7 @@ class Controller:
             held=self.journal.db.execute("SELECT count(*) FROM updates WHERE state='held-maintenance'").fetchone()[0]
             state = '連線中斷' if self.rpc.failure else ('需要確認上次結果' if self.unknown else
                 ('等待你的確認或回答' if self.pending else ('工作進行中' if self.busy else '可以開始工作')))
+            if getattr(self,'background_faults',None):state='背景服務異常，待維護（'+', '.join(self.background_faults)+'）'
             message = ('目前狀態：' + state + '\n模式：' + ('先討論計劃' if self.mode=='plan' else '一般工作')
                 + '\n模型：' + str(self.active_model if self.busy and self.active_model else self.model) + '\n思考程度：' + (self.effort or '預設')
                 + ('\n正在等待自動恢復；新工作預設仍為 '+str(self.model) if self.recovery.waiting else '')

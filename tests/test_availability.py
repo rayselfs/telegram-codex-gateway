@@ -31,7 +31,8 @@ class AvailabilityTests(IsolatedAsyncioTestCase):
         now=[0];tg=Mock(say=AsyncMock());journal=Mock()
         a=Availability(tg,journal,clock=lambda:now[0])
         rpc=SimpleNamespace(failure=None)
-        context={'asyncio':asyncio,'resources':[{'availability':a,'rpc':rpc}],
+        from gateway.core.service_faults import supervise
+        context={'supervise':supervise,'asyncio':asyncio,'resources':[{'availability':a,'rpc':rpc}],
                  'connection':Mock(health=Mock(return_value='ready'))}
         async def tick(): await eval(code,context)
         await tick()
