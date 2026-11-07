@@ -137,7 +137,7 @@ async def serve(home):
         # shortcut: private reconnect flag preserves pending updates; revalidate on Hermes upgrades.
         if not await connection.connect(is_reconnect=True):
             raise RuntimeError('Telegram connection failed')
-        from gateway.telegram.registration import Registration
+        from gateway.core.member_relay import RelayRegistration as Registration
         from gateway.core.onboarding import login, check
         async def send(owner, text):
             receipts=[]
