@@ -47,8 +47,28 @@ class UsageTests(unittest.IsolatedAsyncioTestCase):
   r.extensions['/usage']=Usage(self.members).command
   update=NS(effective_user=NS(id=102,is_bot=False),effective_chat=NS(id=102,type='private'),message=NS(text='/usage',message_id=1))
   self.assertTrue(await r.handle(update));text=send.call_args.args[1]
-  self.assertTrue(text.startswith('本機保留紀錄'));self.assertIn('Member 102',text)
+  self.assertTrue(text.startswith('Member 102'));self.assertIn('Member 102',text)
  def test_counter_regression_is_marked_incomplete(self):
   p=self.fixture();file=p/'a.jsonl';rows=file.read_text().splitlines()
   with file.open('a') as out:out.write(rows[2]+'\n')
   result=summarize(p);self.assertEqual(result['tokens']['total_tokens'],25);self.assertEqual(result['incomplete_files'],1)
+ async def test_compact_usage_and_menu(self):
+  from gateway.telegram.ui import COMMANDS
+  self.fixture();text=await Usage(self.members).command(102,'','test')
+  self.assertIn('已使用',text);self.assertIn('API 標準價估算',text)
+  self.assertNotIn('資料缺口',text);self.assertNotIn('快取／推理',text)
+  self.assertIn('usage',dict(COMMANDS))
+ def test_standard_price_with_cache_and_output(self):
+  p=self.fixture();f=p/'a.jsonl';rows=f.read_text().splitlines()
+  rows.insert(1,json.dumps(dict(type='turn_context',payload={'model':'gpt-6.1-sol'})))
+  f.write_text('\n'.join(rows)+'\n');(p/'duplicate.jsonl').write_text(f.read_text())
+  result=summarize(p)
+  self.assertAlmostEqual(result['estimated_usd'],(18*2+2*.1+5*10)/1000000)
+
+ def test_unknown_model_does_not_invent_price(self):
+  self.assertIsNone(summarize(self.fixture())['estimated_usd'])
+ def test_long_context_and_model_rates(self):
+  from gateway.core.usage import estimate
+  d=dict(input_tokens=300000,cached_input_tokens=100000,cache_write_input_tokens=0,output_tokens=1000)
+  self.assertAlmostEqual(estimate(d,'gpt-6.1-sol',300000),.835)
+  self.assertAlmostEqual(estimate(d,'gpt-6-astra',300000),4.275)

@@ -5,15 +5,28 @@ from pathlib import Path
 
 FIELDS=('input_tokens','cached_input_tokens','output_tokens','reasoning_output_tokens','total_tokens')
 
+# Standard USD per million tokens, verified 2026-11-07: developers.openai.com/api/docs/pricing
+PRICES={'gpt-6.1-sol':(2,.1,10),'gpt-6-astra':(10,1,50)}
+
+def estimate(delta,model,request_input):
+    rates=PRICES.get(model)
+    if rates is None:return None
+    uncached=delta['input_tokens']-delta['cached_input_tokens']-delta['cache_write_input_tokens']
+    if uncached<0:return None
+    input_rate,cache_rate,output_rate=rates
+    if request_input>272000:input_rate*=2;cache_rate*=2;output_rate*=1.5
+    # shortcut: cache-write retention is absent in native logs; use the standard 30-minute rate until recorded.
+    return (uncached*input_rate+delta['cached_input_tokens']*cache_rate+delta['cache_write_input_tokens']*input_rate*1.25+delta['output_tokens']*output_rate)/1000000
+
 def summarize(folder):
     folder=Path(folder)
-    result=dict(tokens={k:0 for k in FIELDS},sessions=0,incomplete_files=0,files_without_usage=0,missing=not folder.is_dir())
+    result=dict(tokens={k:0 for k in FIELDS},sessions=0,incomplete_files=0,files_without_usage=0,missing=not folder.is_dir(),estimated_usd=None)
     if result['missing']:return result
-    sessions={};budget=256*1024*1024
+    sessions={};costs={};budget=256*1024*1024
     for path in sorted(folder.rglob('*.jsonl')):
         if path.is_symlink() or not path.resolve().is_relative_to(folder.resolve()):
             result['incomplete_files']+=1;continue
-        identity=None;latest=None;bad=False
+        identity=None;latest=None;bad=False;model=None;cost=0.;priced=True
         try:
             size=path.stat().st_size
             if size>budget:result['incomplete_files']+=1;continue
@@ -29,22 +42,38 @@ def summarize(folder):
                             value=payload.get('id')
                             if not isinstance(value,str) or not value or len(value)>128 or (identity and identity!=value):bad=True;break
                             identity=value
+                        elif row.get('type')=='turn_context':model=payload.get('model')
                         elif row.get('type')=='event_msg' and payload.get('type')=='token_count':
                             info=payload.get('info') or {};counts=info.get('total_token_usage')
                             if counts is None:continue
                             if any(type(counts.get(k)) is not int or counts[k]<0 for k in FIELDS):bad=True;continue
                             snapshot={k:counts[k] for k in FIELDS}
+                            write=counts.get('cache_write_input_tokens',0)
+                            if type(write) is not int or write<0:bad=True;continue
+                            snapshot['cache_write_input_tokens']=write
                             if latest and any(snapshot[k]<latest[k] for k in FIELDS):bad=True
-                            latest={k:max((latest or {}).get(k,0),snapshot[k]) for k in FIELDS}
+                            delta={k:max(0,v-(latest or {}).get(k,0)) for k,v in snapshot.items()}
+                            if delta['total_tokens']:
+                                request_input=(info.get('last_token_usage') or {}).get('input_tokens',delta['input_tokens'])
+                                if type(request_input) is not int or request_input<0:priced=False
+                                else:
+                                    amount=estimate(delta,model,request_input)
+                                    if amount is None:priced=False
+                                    else:cost+=amount
+                            latest={k:max((latest or {}).get(k,0),v) for k,v in snapshot.items()}
                     except (ValueError,AttributeError,TypeError):bad=True
         except (OSError,UnicodeError):bad=True
         if bad:result['incomplete_files']+=1
         if identity and latest:
             previous=sessions.get(identity,{k:0 for k in FIELDS})
+            if identity not in costs or latest['total_tokens']>previous['total_tokens']:
+                costs[identity]=cost if priced and not bad else None
             sessions[identity]={k:max(previous[k],latest[k]) for k in FIELDS}
         else:result['files_without_usage']+=1
     result['sessions']=len(sessions)
     result['tokens']={k:sum(v[k] for v in sessions.values()) for k in FIELDS}
+    if sessions and not result['incomplete_files'] and all(v is not None for v in costs.values()):
+        result['estimated_usd']=sum(costs.values())
     return result
 
 class Usage:
@@ -69,17 +98,15 @@ class Usage:
         results=await asyncio.to_thread(lambda:[(row,summarize(folder)) for row,folder in targets])
         self.members.require_active(actor)
         if arg=='all':self.members.require_admin(actor)
-        lines=['本機保留紀錄的 token 累計（非帳單）']
+        lines=[]
         for row,result in results:
             name=str(row['display_name']).replace('\n',' ')[:128]
-            lines.append('\n'+name)
+            if lines:lines.append('')
+            lines.append(name)
             if result['missing'] or not result['sessions']:
-                lines.append('無可用用量紀錄，不能視為零使用量。')
+                lines.append('尚無使用紀錄')
             else:
-                v=result['tokens']
-                lines.append(f"對話 {result['sessions']}；總 token {v['total_tokens']:,}")
-                lines.append(f"輸入 {v['input_tokens']:,}（快取 {v['cached_input_tokens']:,}）；輸出 {v['output_tokens']:,}（推理 {v['reasoning_output_tokens']:,}）")
-            if result['incomplete_files'] or result['files_without_usage']:
-                lines.append(f"資料缺口：不完整檔 {result['incomplete_files']}；無用量檔 {result['files_without_usage']}。")
-        lines.append('\n快取／推理為細項，不再加到總數。按對話累計高水位去重；分支可能含繼承用量。只涵蓋本機保留紀錄，不代表帳號全部使用、即時額度或費用。')
+                lines.append(f"已使用 {result['tokens']['total_tokens']:,} tokens")
+                cost=result['estimated_usd']
+                lines.append('API 標準價估算：'+(f'約 US${cost:,.2f}' if cost is not None else '暫無法估算'))
         return '\n'.join(lines)

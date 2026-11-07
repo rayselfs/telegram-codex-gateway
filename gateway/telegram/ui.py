@@ -12,6 +12,7 @@ def failure_text(error):
     return reason + '\n不代表外部操作已取消：Canva 等服務可能仍在處理已送出的任務。目前已停止，不會繼續自動重試。稍後可傳「先查上一個任務的結果，避免重複建立；再接續未完成的部分」。'
 
 COMMANDS = [
+    ('usage','查看 token 使用量與 API 費用估算'),
     ('trust','管理本人 MCP 信任與撤銷'),
     ('secrets','查看本人憑證名稱；請勿在聊天貼 key'),
     ('line','LINE 專用瀏覽器登入與試用說明'),
