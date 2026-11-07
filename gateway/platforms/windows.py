@@ -128,9 +128,38 @@ def opened_path(source):
     return Path(actual)
 
 
+def background_python(python):
+    from pathlib import Path
+    windowless = Path(python).with_name('pythonw.exe')
+    if not windowless.is_file():
+        raise FileNotFoundError('Windowless Python required for background tasks: ' + str(windowless))
+    return str(windowless)
+
+
+def start_background(job):
+    import json,subprocess
+    payload=dict(job,python=background_python(job['python']),
+                 argument_line=subprocess.list2cmdline(job['arguments']))
+    script=r"""
+$ErrorActionPreference='Stop'
+$job=[Console]::In.ReadToEnd() | ConvertFrom-Json
+$task=Get-ScheduledTask -TaskPath '\' -TaskName $job.name -ErrorAction Stop
+[xml]$xml=Export-ScheduledTask -TaskPath '\' -TaskName $job.name
+$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+if($xml.Task.Principals.Principal.UserId -ne $sid -or $task.Principal.LogonType -ne 'Interactive' -or $task.Principal.RunLevel -ne 'Limited'){throw 'Scheduled task identity differs'}
+if(-not $task.Settings.Enabled){throw 'Gateway task is disabled; inspect maintenance state'}
+if($task.Actions.Count -ne 1 -or $task.Actions[0].Execute -ne $job.python -or $task.Actions[0].Arguments -ne $job.argument_line -or $task.Actions[0].WorkingDirectory -ne $job.cwd){throw 'Gateway task binding differs'}
+if($task.State -ne 'Running'){Start-ScheduledTask -TaskPath '\' -TaskName $job.name}
+"""
+    subprocess.run([os.path.join(os.environ['SYSTEMROOT'],'System32/WindowsPowerShell/v1.0/powershell.exe'),
+        '-NoProfile','-NonInteractive','-Command',script],input=json.dumps(payload),text=True,
+        capture_output=True,check=True,timeout=30,**process_options())
+
+
 def install_background(jobs):
     import json,subprocess
-    payload=[dict(job,argument_line=subprocess.list2cmdline(job['arguments'])) for job in jobs]
+    payload=[dict(job,python=background_python(job['python']),
+                  argument_line=subprocess.list2cmdline(job['arguments'])) for job in jobs]
     script=r'''
 $ErrorActionPreference='Stop'
 $definitions=[Console]::In.ReadToEnd() | ConvertFrom-Json
@@ -140,6 +169,7 @@ foreach($job in $definitions){
  $existing=Get-ScheduledTask -TaskName $job.name -ErrorAction SilentlyContinue
  if($existing){
   if($existing.Actions.Count -ne 1 -or $existing.Actions[0].Execute -ne $job.python -or $existing.Actions[0].Arguments -ne $job.argument_line -or $existing.Actions[0].WorkingDirectory -ne $job.cwd){throw 'Existing task binding differs; inspect before takeover'}
+  if(-not $job.interval -and ($existing.Settings.ExecutionTimeLimit -ne 'PT0S' -or @($existing.Triggers | Where-Object {$_.Repetition.Interval -eq 'PT1M'}).Count -eq 0)){throw 'Existing supervisor scheduling policy differs; inspect takeover'}
   continue
  }
  $action=New-ScheduledTaskAction -Execute $job.python -Argument $job.argument_line -WorkingDirectory $job.cwd
@@ -147,7 +177,7 @@ foreach($job in $definitions){
   $trigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Seconds $job.interval)
   $limit=New-TimeSpan -Minutes 10
  }else{
-  $trigger=New-ScheduledTaskTrigger -AtLogOn -User $identity
+  $trigger=@((New-ScheduledTaskTrigger -AtLogOn -User $identity),(New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)))
   $limit=[TimeSpan]::Zero
  }
  $settings=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -ExecutionTimeLimit $limit -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries

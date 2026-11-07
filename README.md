@@ -6,7 +6,7 @@ This branch is an isolated development candidate. Windows offline native protoco
 
 ## New installation
 
-Use Python 3.13 and the exact runtime/dependency versions in `versions.json` and `requirements.txt`. Keep source code and private data in separate nonoverlapping local directories. Shared guidance may be empty. No provider account, token or private organization content is included.
+On Windows, use Python 3.15.2 and the exact dependency versions in `versions.json` and `requirements.txt`. See `PLATFORMS.md` for platform-specific acceptance. Install the interpreter and a fresh virtual environment side by side; do not replace a system Python or copy an old virtual environment across Python versions. Keep source code and private data in separate nonoverlapping local directories. Shared guidance may be empty. No provider account, token or private organization content is included.
 
 1. Run `python -B main.py init --root "C:/GatewayData" --codex "C:/GatewayRuntime/codex.exe" --timezone UTC` on Windows. The bot token is entered through a hidden local prompt. Native macOS initialization remains blocked pending accepted runtime artifact hashes and host tests.
 2. Run `python -B main.py serve --config "C:/GatewayData/deployment.json"` for registration polling. Use the short-lived bootstrap command printed by init in a private bot chat.
@@ -32,3 +32,7 @@ The public scheduler handles reminders, Codex work and registered capabilities. 
 Run `python -B -m unittest discover -s tests -p "test_*.py" -v` only against an explicitly isolated data root. Native tests must use an isolated account home and accepted binary. See [ACCEPTANCE.md](ACCEPTANCE.md), [OPERATIONS.md](OPERATIONS.md), and [SECURITY.md](SECURITY.md).
 
 Profiles share an OS account by design. Gateway authorization is application-level separation, not an OS sandbox for arbitrary local code. Keep data, credentials, database backups and delivery evidence outside this repository. No deployment or remote push is implied by these local changes.
+
+### Windows background recovery
+
+Windows Start.ps1 and release startup request the installed, identity-checked Task Scheduler entry. The supervisor uses logon and one-minute triggers, IgnoreNew and no execution time limit. Stop/maintenance holds prevent child startup. Existing tasks with older policy require reviewed takeover; installation refuses silent replacement. This remains a logged-in user task, not a pre-login Windows service.

@@ -18,13 +18,24 @@ def definitions(config,profiles,*,owner=None):
     if owner is not None and not jobs:raise PermissionError('Active owner required')
     return jobs
 
+def start(config):
+    from gateway.platforms import current
+    home=Path(config['data_root'])/'profile'
+    if any((home/name).exists() for name in ('maintenance.request','stop.request')):
+        raise RuntimeError('Maintenance or stop hold is active; no task started')
+    current().start_background(definitions(config,[])[0])
+
+
 def main():
     from bootstrap import ROOT,CONFIG
     from gateway.core.members import Members
     from gateway.platforms import current
-    parser=argparse.ArgumentParser();parser.add_argument('--install',action='store_true');parser.add_argument('--owner',type=int)
+    parser=argparse.ArgumentParser();parser.add_argument('--install',action='store_true');parser.add_argument('--start',action='store_true');parser.add_argument('--owner',type=int)
     args=parser.parse_args()
     if CONFIG is None:raise RuntimeError('Persistent --config is required for background setup')
+    if args.start:
+        if args.install or args.owner is not None:raise ValueError('Start cannot combine with install or owner')
+        start(CONFIG);print('Scheduled Gateway start requested; inspect fresh health');return
     members=Members(ROOT/'profile/members.sqlite',ROOT)
     try:jobs=definitions(CONFIG,members.active_profiles(),owner=args.owner)
     finally:members.close()

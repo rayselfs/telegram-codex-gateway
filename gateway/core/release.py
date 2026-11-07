@@ -33,6 +33,12 @@ def start_gateway():
     from gateway.platforms import current
     home=ROOT/'profile'
     (home/'stop.request').unlink(missing_ok=True)
+    import os
+    if os.name=='nt':
+        from bootstrap import CONFIG
+        from gateway.core.background import start
+        if CONFIG is None:raise RuntimeError('Persisted deployment required')
+        return start(CONFIG)
     with (home/'stdout.log').open('ab') as out,(home/'stderr.log').open('ab') as err:
         subprocess.Popen([str(PYTHON),'-B',str(CODE_ROOT/'gateway_guard.py')],cwd=CODE_ROOT,
             env=child_environment(),stdout=out,stderr=err,**current().process_options())
