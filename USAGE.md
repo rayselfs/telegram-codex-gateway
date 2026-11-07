@@ -1,6 +1,8 @@
 # Usage summary
 
-`/usage` shows the caller's recorded token total and an estimated equivalent API Standard price in USD. `/usage all` is restricted to administrators. The command appears in the Telegram menu.
+`/usage` shows the caller's retained token totals and estimated equivalent API Standard prices in USD, for all retained history and for the current calendar month in the deployment timezone. `/usage all` is restricted to administrators. The command appears in the Telegram menu.
+
+The first query builds a per-user SQLite index beside the sessions directory. Later queries check file metadata and resume growing logs at the last complete record. Deleted logs are dropped and replaced logs are read again. The index stores file cursors, token counters, model names and monthly aggregates. Month assignment uses native event timestamps; undated usage cannot be attributed to a month. A single query reads up to 256 MiB of new log bytes and the next query continues a larger backlog.
 
 The calculation reads local native session counters without sending model requests. Session IDs and cumulative high-water counters prevent duplicate-file/event counting. Model changes are priced from cumulative deltas. Cached input is discounted; reasoning is already included in output. Long-context rates use the recorded request input size when available. Unknown models, malformed counters or incomplete files suppress the dollar estimate. Sessions without counters do not establish zero usage. Branches may inherit earlier counters.
 

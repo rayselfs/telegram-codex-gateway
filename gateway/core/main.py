@@ -151,7 +151,10 @@ async def serve(home):
             lambda row: login(row, send, registry), lambda row: check(row, registry), attach, connection._bot.username, shared_policy=shared_policy)
         connection.registration.extensions['/mcp']=mcp_policy.command
         from gateway.core.usage import Usage
-        connection.registration.extensions['/usage']=Usage(registry).command
+        from bootstrap import CONFIG
+        from zoneinfo import ZoneInfo
+        usage_zone = ZoneInfo((CONFIG or {}).get('timezone', 'UTC'))
+        connection.registration.extensions['/usage'] = Usage(registry, usage_zone).command
         for item in resources:
             await start_item(item)
         while not stop.exists():

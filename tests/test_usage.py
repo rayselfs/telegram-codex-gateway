@@ -55,7 +55,7 @@ class UsageTests(unittest.IsolatedAsyncioTestCase):
  async def test_compact_usage_and_menu(self):
   from gateway.telegram.ui import COMMANDS
   self.fixture();text=await Usage(self.members).command(102,'','test')
-  self.assertIn('已使用',text);self.assertIn('API 標準價估算',text)
+  self.assertIn('累計　25 tokens',text);self.assertIn('本月（',text)
   self.assertNotIn('資料缺口',text);self.assertNotIn('快取／推理',text)
   self.assertIn('usage',dict(COMMANDS))
  def test_standard_price_with_cache_and_output(self):
@@ -72,3 +72,34 @@ class UsageTests(unittest.IsolatedAsyncioTestCase):
   d=dict(input_tokens=300000,cached_input_tokens=100000,cache_write_input_tokens=0,output_tokens=1000)
   self.assertAlmostEqual(estimate(d,'gpt-6.1-sol',300000),.835)
   self.assertAlmostEqual(estimate(d,'gpt-6-astra',300000),4.275)
+
+ def test_monthly_index_resumes_after_restart_without_rereading(self):
+  from datetime import datetime, timedelta, timezone
+  p=self.fixture()
+  f=p/'a.jsonl'
+  rows=[json.loads(line) for line in f.read_text().splitlines()]
+  rows.insert(1,dict(type='turn_context',payload={'model':'gpt-6.1-sol'}))
+  rows[3]['timestamp']=rows[4]['timestamp']='2026-10-31T15:59:59Z'
+  rows[5]['timestamp']='2026-10-31T16:00:00Z'
+  f.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+  duplicate=p/'duplicate.jsonl'
+  duplicate.write_bytes(f.read_bytes())
+  zone=timezone(timedelta(hours=8))
+  now=datetime(2026,11,1,tzinfo=zone)
+  result=summarize(p,zone,now)
+  self.assertEqual(result['monthly']['total_tokens'],10)
+  self.assertAlmostEqual(result['monthly']['estimated_usd'],.000020)
+  with patch.object(Path,'open',side_effect=AssertionError('unchanged history reread')):
+   self.assertEqual(summarize(p,zone,now),result)
+  rows[5]['payload']['info']['total_token_usage'].update(input_tokens=30,total_tokens=35)
+  with f.open('a') as target:
+   target.write(json.dumps(rows[5]))
+  self.assertEqual(summarize(p,zone,now)['monthly']['total_tokens'],10)
+  with f.open('a') as target:
+   target.write('\n')
+  result=summarize(p,zone,now)
+  self.assertEqual(result['tokens']['total_tokens'],35)
+  self.assertEqual(result['monthly']['total_tokens'],20)
+  self.assertEqual(summarize(p,zone,datetime(2026,12,1,tzinfo=zone))['monthly']['total_tokens'],0)
+  f.unlink()
+  self.assertEqual(summarize(p,zone,now)['monthly']['total_tokens'],10)
